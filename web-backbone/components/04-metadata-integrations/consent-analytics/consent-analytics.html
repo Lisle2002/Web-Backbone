@@ -1,0 +1,435 @@
+<style>
+.wb-consent__panel {
+  position: fixed; z-index: var(--wb-consent-z, 1000); right: 1rem; bottom: 1rem; left: 1rem;
+  box-sizing: border-box; max-width: 30rem; max-height: calc(100vh - 2rem); overflow: auto; padding: 1rem 1.25rem;
+  color: var(--wb-text, #1a1a1a); background: var(--wb-bg, #fff);
+  border: 1px solid var(--wb-border, #767676); border-radius: var(--wb-radius, 0.5rem);
+  box-shadow: 0 0.5rem 1.5rem rgba(0, 0, 0, 0.2);
+}
+.wb-consent__panel[hidden], .wb-consent [hidden] { display: none; }
+.wb-consent__panel:focus-visible { outline: 3px solid var(--wb-focus, #005fcc); outline-offset: 2px; }
+.wb-consent__title { margin: 0 0 0.5rem; font-weight: 700; }
+.wb-consent__text, .wb-consent__current, .wb-consent__preview { margin: 0 0 0.5rem; }
+.wb-consent__preview { font-weight: 600; }
+.wb-consent__actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.75rem; }
+.wb-consent__button {
+  min-width: 2.75rem; min-height: 2.75rem; padding: 0.5rem 1rem; font: inherit; font-weight: 600; cursor: pointer;
+  color: var(--wb-on-accent, #fff); background: var(--wb-accent, #1a56db);
+  border: 2px solid var(--wb-accent, #1a56db); border-radius: var(--wb-radius, 0.5rem);
+}
+.wb-consent__button--plain { color: var(--wb-text, #1a1a1a); background: transparent; border-color: var(--wb-border, #767676); }
+.wb-consent__button:focus-visible, .wb-consent__panel a:focus-visible { outline: 3px solid var(--wb-focus, #005fcc); outline-offset: 2px; }
+.wb-consent__open {
+  min-height: 2.75rem; padding: 0.35rem 0.9rem; font: inherit; cursor: pointer;
+  color: inherit; background: transparent; border: 1px solid var(--wb-border, #767676); border-radius: var(--wb-radius, 0.5rem);
+}
+.wb-consent__open:focus-visible { outline: 3px solid var(--wb-focus, #005fcc); outline-offset: 2px; }
+.wb-consent__live {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+</style>
+
+<!-- ONCE PER PAGE. Put near the end of <body>. -->
+<div class="wb-consent" data-wb="consent-analytics"
+     data-wb-ga4-id="G-YOUR_MEASUREMENT_ID"
+     data-wb-version="1" data-wb-remember-days="180" data-wb-honor-gpc="true">
+  <div class="wb-consent__panel" role="region" aria-label="Analytics cookies" tabindex="-1" hidden>
+    <p class="wb-consent__title">Analytics cookies</p>
+    <p class="wb-consent__text">
+      We would like to use Google Analytics to count visits and see which pages are used. It sets cookies on your
+      device and sends usage data to Google. Nothing is loaded unless you choose to allow it, and you can change
+      your mind at any time. <a class="wb-consent__link" href="YOUR_PRIVACY_POLICY_URL">Privacy policy</a>
+    </p>
+    <p class="wb-consent__current" data-wb-current hidden></p>
+    <div class="wb-consent__actions">
+      <button type="button" class="wb-consent__button" data-wb-accept>Allow analytics</button>
+      <button type="button" class="wb-consent__button" data-wb-decline>Decline analytics</button>
+      <button type="button" class="wb-consent__button wb-consent__button--plain" data-wb-close hidden>Close</button>
+    </div>
+  </div>
+  <p class="wb-consent__live" role="status"></p>
+</div>
+
+<!-- Put this in your footer. Visitors use it to change or withdraw their choice. Several are allowed. -->
+<button type="button" class="wb-consent__open" data-wb-consent-open hidden>Cookie settings</button>
+
+<script>
+/* ---- wb core 1.1: identical in every component; safe to include more than once ---- */
+(function () {
+  var VERSION = '1.1';
+  var W = (window.WB = window.WB || {});
+  if (W.core) {
+    if (W.core !== VERSION) {
+      console.warn('[wb] Two versions of the wb core are on this page (' + W.core + ' and ' + VERSION + '). The first one loaded is used.');
+    }
+    return;
+  }
+  W.core = VERSION;
+  W.parts = {};
+  W.flags = {};
+  var counter = 0;
+  var starting = [];
+
+  /* Unique id for generated markup, for example "wb-faq-3". An id that is already on the page
+     (for example one your own site uses) is skipped. */
+  W.uid = function (prefix) {
+    var id;
+    do {
+      counter += 1;
+      id = 'wb-' + prefix + '-' + counter;
+    } while (document.getElementById(id));
+    return id;
+  };
+
+  /* Reads data-wb-<key> from an element. Returns fallback when missing or empty. */
+  W.opt = function (el, key, fallback) {
+    var value = el.getAttribute('data-wb-' + key);
+    value = value === null ? '' : value.trim();
+    return value === '' ? fallback : value;
+  };
+
+  /* True when a setting is empty or still contains a YOUR_... placeholder. */
+  W.todo = function (value) {
+    return !value || /YOUR_[A-Z0-9_]+/.test(value);
+  };
+
+  /* Runs fn one time per page for a given key. */
+  W.once = function (key, fn) {
+    if (!W.flags[key]) { W.flags[key] = true; fn(); }
+  };
+
+  /* Dispatches a bubbling "wb:<name>" event from el. */
+  W.emit = function (el, name, detail) {
+    el.dispatchEvent(new CustomEvent('wb:' + name, { bubbles: true, detail: detail || {} }));
+  };
+
+  W.ready = function (fn) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', fn);
+    } else {
+      fn();
+    }
+  };
+
+  /* Starts every [data-wb="<name>"] inside root (root included) that has not started yet.
+     data-wb-ready is set only after the component's start-up finished without an error.
+     If it failed, the element gets data-wb-error (holding the message) and can be started again by
+     fixing the markup and calling WB.init(container). Call WB.init(container) after you insert new
+     markup with JavaScript. */
+  W.init = function (root, only) {
+    root = root || document;
+    Object.keys(W.parts).forEach(function (name) {
+      if (only && only !== name) { return; }
+      var selector = '[data-wb="' + name + '"]';
+      var found = Array.prototype.slice.call(root.querySelectorAll(selector));
+      if (root.nodeType === 1 && root.matches(selector)) { found.unshift(root); }
+      found.forEach(function (el) {
+        if (el.hasAttribute('data-wb-ready') || starting.indexOf(el) >= 0) { return; }
+        starting.push(el);
+        try {
+          W.parts[name](el);
+          el.setAttribute('data-wb-ready', '');
+          el.removeAttribute('data-wb-error');
+        } catch (err) {
+          var message = String((err && err.message) || err);
+          if (el.getAttribute('data-wb-error') !== message) {
+            console.error('[wb ' + name + ']', err);
+          }
+          el.setAttribute('data-wb-error', message);
+        } finally {
+          starting.splice(starting.indexOf(el), 1);
+        }
+      });
+    });
+  };
+
+  /* Registers a component. The first copy of a component on the page wins. */
+  W.define = function (name, init) {
+    if (!W.parts[name]) { W.parts[name] = init; }
+    W.ready(function () { W.init(document, name); });
+  };
+})();
+(function () {
+  var KEY = 'wb-consent-analytics';
+  var ID_PATTERN = /^G-[A-Z0-9]{4,20}$/;
+  var memory = {};
+  var current = null;   /* the one consent control that is active on this page */
+
+  WB.consent = WB.consent || { analytics: undefined };
+  WB.analytics = WB.analytics || {
+    /* Sends a Google Analytics event. Returns true only when the event was handed to a loaded, allowed tag. */
+    event: function (name, params) {
+      return current && current.el.isConnected ? current.event(name, params) : false;
+    }
+  };
+
+  function readStored() {
+    if (memory[KEY] !== undefined) { return memory[KEY]; }
+    try { return window.localStorage.getItem(KEY); } catch (err) { return null; }
+  }
+
+  /* Returns true when the value was saved in the browser's storage, false when only kept in memory. */
+  function writeStored(value) {
+    try {
+      window.localStorage.setItem(KEY, value);
+      delete memory[KEY];
+      return true;
+    } catch (err) {
+      memory[KEY] = value;
+      return false;
+    }
+  }
+
+  function parseChoice(raw, version, maxDays) {
+    var data;
+    if (!raw) { return null; }
+    try { data = JSON.parse(raw); } catch (err) { return null; }
+    if (!data || typeof data !== 'object') { return null; }
+    if (data.a !== 0 && data.a !== 1) { return null; }
+    if (String(data.v) !== version) { return null; }
+    if (typeof data.t !== 'number' || Date.now() - data.t > maxDays * 86400000) { return null; }
+    return { analytics: data.a === 1 };
+  }
+
+  /* Best effort: removes Google Analytics cookies from this host and its parent domains. */
+  function deleteGoogleCookies() {
+    var names = document.cookie.split(';').map(function (part) {
+      return part.split('=')[0].trim();
+    }).filter(function (name) {
+      return /^(_ga|_gid|_gat)/.test(name);
+    });
+    if (!names.length) { return; }
+    var host = window.location.hostname;
+    var domains = [''];
+    if (!/^[0-9.]+$/.test(host) && host.indexOf(':') === -1) {
+      var parts = host.split('.');
+      for (var i = 0; i < parts.length - 1; i++) { domains.push('.' + parts.slice(i).join('.')); }
+    }
+    names.forEach(function (name) {
+      domains.forEach(function (domain) {
+        document.cookie = name + '=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/' + (domain ? '; domain=' + domain : '');
+      });
+    });
+  }
+
+  function nextFocusable(from) {
+    var all = document.querySelectorAll('a[href], button:not([disabled]), input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])');
+    var first = null;
+    for (var i = 0; i < all.length; i++) {
+      if (from.contains(all[i]) || all[i].getClientRects().length === 0) { continue; }
+      if (!first) { first = all[i]; }
+      if (from.compareDocumentPosition(all[i]) & Node.DOCUMENT_POSITION_FOLLOWING) { return all[i]; }
+    }
+    return first;
+  }
+
+  /* One click listener for every "Cookie settings" button, including ones added later. */
+  WB.once('consent-analytics-openers', function () {
+    document.addEventListener('click', function (event) {
+      var target = event.target;
+      var opener = target && target.closest ? target.closest('[data-wb-consent-open]') : null;
+      if (!opener || !current || !current.el.isConnected) { return; }
+      event.preventDefault();
+      current.open(opener);
+    });
+  });
+
+  WB.define('consent-analytics', function (el) {
+    var panel = el.querySelector('.wb-consent__panel');
+    var live = el.querySelector('.wb-consent__live');
+    var acceptButton = el.querySelector('[data-wb-accept]');
+    var declineButton = el.querySelector('[data-wb-decline]');
+    var closeButton = el.querySelector('[data-wb-close]');
+    var note = el.querySelector('[data-wb-current]');
+    if (!panel || !live || !acceptButton || !declineButton) {
+      throw new Error('consent-analytics: the markup is incomplete. Copy the whole block.');
+    }
+
+    function openers() { return Array.prototype.slice.call(document.querySelectorAll('[data-wb-consent-open]')); }
+    function showOpeners(visible) { openers().forEach(function (button) { button.hidden = !visible; }); }
+
+    if (current && current.el.isConnected) {
+      el.setAttribute('data-wb-state', 'duplicate');
+      panel.hidden = true;
+      console.warn('[wb consent-analytics] Only one consent block works per page. This extra one is switched off.');
+      return;
+    }
+
+    var id = WB.opt(el, 'ga4-id', '');
+    var dry = el.hasAttribute('data-wb-dry-run');
+    var version = WB.opt(el, 'version', '1');
+    var days = parseFloat(WB.opt(el, 'remember-days', '180'));
+    if (!(days > 0)) { days = 180; }
+    var honorGpc = WB.opt(el, 'honor-gpc', 'true') !== 'false';
+
+    if (!dry) {
+      if (WB.todo(id)) {
+        el.setAttribute('data-wb-state', 'unconfigured');
+        showOpeners(false);
+        console.warn('[wb consent-analytics] Set data-wb-ga4-id to your Measurement ID (or add data-wb-dry-run to preview).');
+        return;
+      }
+      if (!ID_PATTERN.test(id)) {
+        el.setAttribute('data-wb-state', 'invalid');
+        showOpeners(false);
+        console.warn('[wb consent-analytics] data-wb-ga4-id must look like G-ABC123DEF4. Google Tag Manager (GTM-...) and Universal Analytics (UA-...) IDs are not supported here.');
+        return;
+      }
+      if (document.querySelector('script[src*="googletagmanager.com"]')) {
+        el.setAttribute('data-wb-state', 'conflict');
+        showOpeners(false);
+        console.warn('[wb consent-analytics] Another Google tag is already on this page. Remove it so this component is the only loader.');
+        return;
+      }
+    }
+
+    var link = panel.querySelector('.wb-consent__link');
+    if (link && /YOUR_[A-Z0-9_]+/.test(link.getAttribute('href') || '')) {
+      link.removeAttribute('href');
+      console.warn('[wb consent-analytics] Set the privacy-policy link (YOUR_PRIVACY_POLICY_URL).');
+    }
+
+    var texts = {
+      allowed: WB.opt(el, 'text-allowed', 'Analytics are allowed.'),
+      declined: WB.opt(el, 'text-declined', 'Analytics are declined.'),
+      gpc: WB.opt(el, 'text-gpc', 'Your browser sends a Global Privacy Control signal, so analytics stay off unless you allow them here.'),
+      unsaved: WB.opt(el, 'text-unsaved', 'Your choice could not be saved on this device, so you may be asked again.'),
+      preview: WB.opt(el, 'text-preview', 'Preview mode: no analytics script is loaded and nothing is sent.')
+    };
+
+    var granted;          /* true, false, or undefined while no choice has been made */
+    var source = 'pending';
+    var persisted = true;
+    var started = false;  /* the Google tag has been requested */
+    var loaded = false;   /* the Google tag finished loading */
+    var lastOpener = null;
+
+    if (dry) {
+      var preview = document.createElement('p');
+      preview.className = 'wb-consent__preview';
+      preview.textContent = texts.preview;
+      panel.insertBefore(preview, panel.querySelector('.wb-consent__actions'));
+    }
+
+    function gtag() {
+      window.dataLayer = window.dataLayer || [];
+      window.dataLayer.push(arguments);
+    }
+
+    function loadTag() {
+      var script = document.createElement('script');
+      script.async = true;
+      script.src = 'https://www.googletagmanager.com/gtag/js?id=' + encodeURIComponent(id);
+      script.setAttribute('data-wb-gtag', '');
+      script.onload = function () {
+        loaded = true;
+        el.setAttribute('data-wb-analytics', granted === true ? 'on' : 'off');
+      };
+      script.onerror = function () {
+        el.setAttribute('data-wb-analytics', 'blocked');
+        console.warn('[wb consent-analytics] The Google tag could not be loaded (blocked or offline). No data is sent.');
+      };
+      document.head.appendChild(script);
+    }
+
+    function enable() {
+      if (dry) { el.setAttribute('data-wb-analytics', 'dry-run'); return; }
+      window['ga-disable-' + id] = false;
+      if (!started) {
+        started = true;
+        el.setAttribute('data-wb-analytics', 'loading');
+        gtag('consent', 'default', {
+          analytics_storage: 'denied', ad_storage: 'denied', ad_user_data: 'denied', ad_personalization: 'denied'
+        });
+        gtag('consent', 'update', { analytics_storage: 'granted' });
+        gtag('js', new Date());
+        gtag('config', id);
+        loadTag();
+      } else {
+        gtag('consent', 'update', { analytics_storage: 'granted' });
+        el.setAttribute('data-wb-analytics', loaded ? 'on' : 'loading');
+      }
+    }
+
+    function disable() {
+      el.setAttribute('data-wb-analytics', dry ? 'dry-run' : 'off');
+      if (dry) { return; }
+      window['ga-disable-' + id] = true;
+      if (started) { gtag('consent', 'update', { analytics_storage: 'denied' }); }
+      deleteGoogleCookies();
+    }
+
+    function describe() {
+      var text = '';
+      if (granted === true) { text = texts.allowed; }
+      if (granted === false) { text = source === 'gpc' ? texts.gpc : texts.declined; }
+      if (text && !persisted) { text += ' ' + texts.unsaved; }
+      return text;
+    }
+
+    function apply() {
+      WB.consent.analytics = granted;
+      el.setAttribute('data-wb-consent', granted === true ? 'granted' : (granted === false ? 'denied' : 'pending'));
+      if (granted === true) { enable(); } else { disable(); }
+      if (granted !== undefined) { WB.emit(el, 'consent-change', { analytics: granted, source: source }); }
+    }
+
+    function openPanel(opener, quiet) {
+      lastOpener = opener || null;
+      var text = describe();
+      if (note) { note.textContent = text; note.hidden = !text; }
+      if (closeButton) { closeButton.hidden = granted === undefined; }
+      panel.hidden = false;
+      if (!quiet) { panel.focus(); }
+    }
+
+    function closePanel() {
+      var hadFocus = panel.contains(document.activeElement);
+      panel.hidden = true;
+      if (hadFocus) {
+        var target = lastOpener && lastOpener.isConnected && !lastOpener.hidden ? lastOpener : nextFocusable(el);
+        if (target) { target.focus(); }
+      }
+      lastOpener = null;
+    }
+
+    function choose(value) {
+      granted = value;
+      source = 'user';
+      persisted = writeStored(JSON.stringify({ v: version, a: value ? 1 : 0, t: Date.now() }));
+      apply();
+      closePanel();
+      live.textContent = describe();
+    }
+
+    acceptButton.addEventListener('click', function () { choose(true); });
+    declineButton.addEventListener('click', function () { choose(false); });
+    if (closeButton) { closeButton.addEventListener('click', closePanel); }
+
+    current = {
+      el: el,
+      open: openPanel,
+      event: function (name, params) {
+        if (dry || !loaded || granted !== true) { return false; }
+        if (typeof name !== 'string' || !/^[a-z][a-z0-9_]{0,39}$/.test(name)) { return false; }
+        gtag('event', name, params || {});
+        return true;
+      }
+    };
+
+    var stored = parseChoice(readStored(), version, days);
+    if (stored) {
+      granted = stored.analytics;
+      source = 'stored';
+    } else if (honorGpc && navigator.globalPrivacyControl === true) {
+      granted = false;
+      source = 'gpc';
+    }
+    el.setAttribute('data-wb-state', 'ready');
+    showOpeners(true);
+    apply();
+    if (granted === undefined) { openPanel(null, true); }
+  });
+})();
+</script>

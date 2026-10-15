@@ -1,0 +1,27 @@
+<style>
+.wb-map { margin: 0; }
+.wb-map__frame {
+  position: relative;
+  aspect-ratio: var(--wb-map-ratio, 4 / 3);
+  overflow: hidden;
+  border-radius: var(--wb-radius, 0.5rem);
+  background: var(--wb-bg, #f2f2f2);
+}
+.wb-map__frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.wb-map__link { margin: 0.5rem 0 0; }
+.wb-map__link a:focus-visible { outline: 2px solid var(--wb-focus, #005fcc); outline-offset: 2px; }
+</style>
+
+<figure class="wb-map">
+  <div class="wb-map__frame">
+    <iframe
+      src="about:blank#YOUR_GOOGLE_MAPS_EMBED_ADDRESS"
+      title="Map showing YOUR_PLACE_NAME"
+      loading="lazy"
+      referrerpolicy="no-referrer-when-downgrade"
+      allowfullscreen></iframe>
+  </div>
+  <figcaption class="wb-map__link">
+    <a href="https://www.google.com/maps/search/?api=1&amp;query=YOUR_ADDRESS_URL_ENCODED" target="_blank" rel="noopener">Open in Google Maps (new tab)</a>
+  </figcaption>
+</figure>

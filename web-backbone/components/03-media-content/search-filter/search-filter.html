@@ -1,0 +1,218 @@
+<style>
+.wb-filter__controls { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; margin-bottom: 0.75rem; }
+.wb-filter__controls[hidden] { display: none; }
+.wb-filter__label { display: block; font-weight: 600; }
+.wb-filter__field {
+  display: block; box-sizing: border-box; min-width: 12rem; margin-top: 0.25rem; padding: 0.55rem 0.7rem; font: inherit; color: inherit;
+  background: var(--wb-bg, transparent); border: 1px solid var(--wb-border, #767676); border-radius: var(--wb-radius, 0.375rem);
+}
+.wb-filter__clear {
+  min-height: 2.5rem; padding: 0.4rem 0.9rem; font: inherit; cursor: pointer; color: var(--wb-accent, #1a56db); background: var(--wb-bg, transparent);
+  border: 1px solid var(--wb-accent, #1a56db); border-radius: var(--wb-radius, 0.375rem);
+}
+.wb-filter__field:focus-visible, .wb-filter__clear:focus-visible { outline: 2px solid var(--wb-focus, #005fcc); outline-offset: 2px; }
+.wb-filter__count { margin: 0 0 0.75rem; color: var(--wb-muted, inherit); }
+.wb-filter [data-wb-item][hidden] { display: none !important; }
+.wb-filter [data-wb-empty][hidden] { display: none; }
+</style>
+
+<div class="wb-filter" data-wb="search-filter" data-wb-min="1">
+  <div class="wb-filter__controls" data-wb-controls hidden>
+    <label class="wb-filter__label">Search
+      <input class="wb-filter__field" type="search" autocomplete="off" data-wb-search>
+    </label>
+    <label class="wb-filter__label">Category
+      <select class="wb-filter__field" data-wb-tag-select><option value="">All</option></select>
+    </label>
+    <button type="button" class="wb-filter__clear" data-wb-clear>Clear</button>
+  </div>
+  <p class="wb-filter__count" role="status" aria-live="polite" data-wb-count></p>
+  <p data-wb-empty hidden>Nothing matches. Try different words or press Clear.</p>
+
+  <!-- YOUR EXISTING CARDS GO HERE. Give each one data-wb-item. -->
+  <ul>
+    <li data-wb-item data-wb-tags="YOUR_TAG_A" data-wb-keywords="YOUR_EXTRA_WORDS">YOUR_CARD_ONE</li>
+    <li data-wb-item data-wb-tags="YOUR_TAG_A, YOUR_TAG_B">YOUR_CARD_TWO</li>
+    <li data-wb-item data-wb-tags="YOUR_TAG_B">YOUR_CARD_THREE</li>
+  </ul>
+</div>
+
+<script>
+/* ---- wb core 1.1: identical in every component; safe to include more than once ---- */
+(function () {
+  var VERSION = '1.1';
+  var W = (window.WB = window.WB || {});
+  if (W.core) {
+    if (W.core !== VERSION) {
+      console.warn('[wb] Two versions of the wb core are on this page (' + W.core + ' and ' + VERSION + '). The first one loaded is used.');
+    }
+    return;
+  }
+  W.core = VERSION;
+  W.parts = {};
+  W.flags = {};
+  var counter = 0;
+  var starting = [];
+
+  /* Unique id for generated markup, for example "wb-faq-3". An id that is already on the page
+     (for example one your own site uses) is skipped. */
+  W.uid = function (prefix) {
+    var id;
+    do {
+      counter += 1;
+      id = 'wb-' + prefix + '-' + counter;
+    } while (document.getElementById(id));
+    return id;
+  };
+
+  /* Reads data-wb-<key> from an element. Returns fallback when missing or empty. */
+  W.opt = function (el, key, fallback) {
+    var value = el.getAttribute('data-wb-' + key);
+    value = value === null ? '' : value.trim();
+    return value === '' ? fallback : value;
+  };
+
+  /* True when a setting is empty or still contains a YOUR_... placeholder. */
+  W.todo = function (value) {
+    return !value || /YOUR_[A-Z0-9_]+/.test(value);
+  };
+
+  /* Runs fn one time per page for a given key. */
+  W.once = function (key, fn) {
+    if (!W.flags[key]) { W.flags[key] = true; fn(); }
+  };
+
+  /* Dispatches a bubbling "wb:<name>" event from el. */
+  W.emit = function (el, name, detail) {
+    el.dispatchEvent(new CustomEvent('wb:' + name, { bubbles: true, detail: detail || {} }));
+  };
+
+  W.ready = function (fn) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', fn);
+    } else {
+      fn();
+    }
+  };
+
+  /* Starts every [data-wb="<name>"] inside root (root included) that has not started yet.
+     data-wb-ready is set only after the component's start-up finished without an error.
+     If it failed, the element gets data-wb-error (holding the message) and can be started again by
+     fixing the markup and calling WB.init(container). Call WB.init(container) after you insert new
+     markup with JavaScript. */
+  W.init = function (root, only) {
+    root = root || document;
+    Object.keys(W.parts).forEach(function (name) {
+      if (only && only !== name) { return; }
+      var selector = '[data-wb="' + name + '"]';
+      var found = Array.prototype.slice.call(root.querySelectorAll(selector));
+      if (root.nodeType === 1 && root.matches(selector)) { found.unshift(root); }
+      found.forEach(function (el) {
+        if (el.hasAttribute('data-wb-ready') || starting.indexOf(el) >= 0) { return; }
+        starting.push(el);
+        try {
+          W.parts[name](el);
+          el.setAttribute('data-wb-ready', '');
+          el.removeAttribute('data-wb-error');
+        } catch (err) {
+          var message = String((err && err.message) || err);
+          if (el.getAttribute('data-wb-error') !== message) {
+            console.error('[wb ' + name + ']', err);
+          }
+          el.setAttribute('data-wb-error', message);
+        } finally {
+          starting.splice(starting.indexOf(el), 1);
+        }
+      });
+    });
+  };
+
+  /* Registers a component. The first copy of a component on the page wins. */
+  W.define = function (name, init) {
+    if (!W.parts[name]) { W.parts[name] = init; }
+    W.ready(function () { W.init(document, name); });
+  };
+})();
+(function () {
+  function normalize(text) {
+    return String(text).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
+  }
+
+  WB.define('search-filter', function (root) {
+    var controls = root.querySelector('[data-wb-controls]');
+    var input = root.querySelector('[data-wb-search]');
+    var select = root.querySelector('[data-wb-tag-select]');
+    var clear = root.querySelector('[data-wb-clear]');
+    var count = root.querySelector('[data-wb-count]');
+    var empty = root.querySelector('[data-wb-empty]');
+    var items = Array.prototype.slice.call(root.querySelectorAll('[data-wb-item]'));
+    if (!input || !items.length) { throw new Error('search-filter needs [data-wb-search] and at least one [data-wb-item]'); }
+    var minLength = parseInt(WB.opt(root, 'min', '1'), 10);
+    if (!(minLength >= 0)) { minLength = 1; }
+    var timer = null;
+
+    var records = items.map(function (item) {
+      var tags = (item.getAttribute('data-wb-tags') || '').split(',').map(function (t) { return t.trim(); }).filter(Boolean);
+      var text = item.textContent + ' ' + (item.getAttribute('data-wb-keywords') || '') + ' ' + tags.join(' ');
+      return { el: item, haystack: normalize(text), tags: tags.map(normalize) };
+    });
+
+    if (select && select.options.length <= 1) {
+      var seen = {};
+      items.forEach(function (item) {
+        (item.getAttribute('data-wb-tags') || '').split(',').forEach(function (t) {
+          t = t.trim();
+          if (t && !seen[normalize(t)]) { seen[normalize(t)] = t; }
+        });
+      });
+      Object.keys(seen).sort().forEach(function (key) {
+        var option = document.createElement('option');
+        option.value = key;
+        option.textContent = seen[key];
+        select.appendChild(option);
+      });
+      if (select.options.length <= 1) { select.parentNode.hidden = true; }
+    }
+
+    function apply(announce) {
+      var query = normalize(input.value);
+      var words = query.length >= minLength ? query.split(' ').filter(Boolean) : [];
+      var tag = select ? select.value : '';
+      var shown = 0;
+      records.forEach(function (record) {
+        var ok = words.every(function (w) { return record.haystack.indexOf(w) >= 0; }) && (!tag || record.tags.indexOf(tag) >= 0);
+        record.el.hidden = !ok;
+        if (ok) { shown++; }
+      });
+      if (empty) { empty.hidden = shown !== 0; }
+      if (count) {
+        var text = shown === records.length ? 'Showing all ' + shown + ' items' : 'Showing ' + shown + ' of ' + records.length + ' items';
+        if (announce) {
+          clearTimeout(timer);
+          timer = setTimeout(function () { count.textContent = text; }, 250);
+        } else {
+          count.textContent = text;
+        }
+      }
+      WB.emit(root, 'filter-change', { shown: shown, total: records.length });
+    }
+
+    input.addEventListener('input', function () { apply(true); });
+    if (select) { select.addEventListener('change', function () { apply(true); }); }
+    if (clear) {
+      clear.addEventListener('click', function () {
+        input.value = '';
+        if (select) { select.value = ''; }
+        apply(true);
+        input.focus();
+      });
+    }
+    input.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape' && input.value) { input.value = ''; apply(true); }
+    });
+
+    if (controls) { controls.hidden = false; }
+    apply(false);
+  });
+})();
+</script>

@@ -1,0 +1,177 @@
+<style>
+.wb-embed__placeholder {
+  box-sizing: border-box; padding: 1rem; border: 1px solid var(--wb-border, #767676); border-radius: var(--wb-radius, 0.5rem);
+  background: var(--wb-bg, transparent);
+}
+.wb-embed__placeholder p { margin: 0 0 0.75rem; }
+.wb-embed__placeholder p:last-child { margin-bottom: 0; }
+.wb-embed__button {
+  min-height: 2.75rem; padding: 0.5rem 1.1rem; font: inherit; font-weight: 600; cursor: pointer;
+  color: var(--wb-on-accent, #fff); background: var(--wb-accent, #1a56db); border: 1px solid transparent; border-radius: var(--wb-radius, 0.375rem);
+}
+.wb-embed__button[disabled] { opacity: 0.6; cursor: not-allowed; }
+.wb-embed__button:focus-visible, .wb-embed a:focus-visible, .wb-embed__frame iframe:focus-visible { outline: 2px solid var(--wb-focus, #005fcc); outline-offset: 2px; }
+.wb-embed__frame { position: relative; overflow: hidden; background: #000; border-radius: var(--wb-radius, 0.25rem); }
+.wb-embed__frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+</style>
+
+<div class="wb-embed" data-wb="click-to-load"
+     data-wb-src="https://www.youtube-nocookie.com/embed/YOUR_YOUTUBE_VIDEO_ID"
+     data-wb-title="YOUR_VIDEO_TITLE"
+     data-wb-ratio="16 / 9"
+     data-wb-allow-hosts="">
+  <div class="wb-embed__placeholder" data-wb-placeholder>
+    <p>This video is provided by YouTube. Loading it connects your browser to YouTube, which may set cookies.</p>
+    <p><button type="button" class="wb-embed__button" data-wb-load>Load video</button></p>
+    <p><a href="https://www.youtube.com/watch?v=YOUR_YOUTUBE_VIDEO_ID">Open it on YouTube instead</a></p>
+  </div>
+</div>
+
+<script>
+/* ---- wb core 1.1: identical in every component; safe to include more than once ---- */
+(function () {
+  var VERSION = '1.1';
+  var W = (window.WB = window.WB || {});
+  if (W.core) {
+    if (W.core !== VERSION) {
+      console.warn('[wb] Two versions of the wb core are on this page (' + W.core + ' and ' + VERSION + '). The first one loaded is used.');
+    }
+    return;
+  }
+  W.core = VERSION;
+  W.parts = {};
+  W.flags = {};
+  var counter = 0;
+  var starting = [];
+
+  /* Unique id for generated markup, for example "wb-faq-3". An id that is already on the page
+     (for example one your own site uses) is skipped. */
+  W.uid = function (prefix) {
+    var id;
+    do {
+      counter += 1;
+      id = 'wb-' + prefix + '-' + counter;
+    } while (document.getElementById(id));
+    return id;
+  };
+
+  /* Reads data-wb-<key> from an element. Returns fallback when missing or empty. */
+  W.opt = function (el, key, fallback) {
+    var value = el.getAttribute('data-wb-' + key);
+    value = value === null ? '' : value.trim();
+    return value === '' ? fallback : value;
+  };
+
+  /* True when a setting is empty or still contains a YOUR_... placeholder. */
+  W.todo = function (value) {
+    return !value || /YOUR_[A-Z0-9_]+/.test(value);
+  };
+
+  /* Runs fn one time per page for a given key. */
+  W.once = function (key, fn) {
+    if (!W.flags[key]) { W.flags[key] = true; fn(); }
+  };
+
+  /* Dispatches a bubbling "wb:<name>" event from el. */
+  W.emit = function (el, name, detail) {
+    el.dispatchEvent(new CustomEvent('wb:' + name, { bubbles: true, detail: detail || {} }));
+  };
+
+  W.ready = function (fn) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', fn);
+    } else {
+      fn();
+    }
+  };
+
+  /* Starts every [data-wb="<name>"] inside root (root included) that has not started yet.
+     data-wb-ready is set only after the component's start-up finished without an error.
+     If it failed, the element gets data-wb-error (holding the message) and can be started again by
+     fixing the markup and calling WB.init(container). Call WB.init(container) after you insert new
+     markup with JavaScript. */
+  W.init = function (root, only) {
+    root = root || document;
+    Object.keys(W.parts).forEach(function (name) {
+      if (only && only !== name) { return; }
+      var selector = '[data-wb="' + name + '"]';
+      var found = Array.prototype.slice.call(root.querySelectorAll(selector));
+      if (root.nodeType === 1 && root.matches(selector)) { found.unshift(root); }
+      found.forEach(function (el) {
+        if (el.hasAttribute('data-wb-ready') || starting.indexOf(el) >= 0) { return; }
+        starting.push(el);
+        try {
+          W.parts[name](el);
+          el.setAttribute('data-wb-ready', '');
+          el.removeAttribute('data-wb-error');
+        } catch (err) {
+          var message = String((err && err.message) || err);
+          if (el.getAttribute('data-wb-error') !== message) {
+            console.error('[wb ' + name + ']', err);
+          }
+          el.setAttribute('data-wb-error', message);
+        } finally {
+          starting.splice(starting.indexOf(el), 1);
+        }
+      });
+    });
+  };
+
+  /* Registers a component. The first copy of a component on the page wins. */
+  W.define = function (name, init) {
+    if (!W.parts[name]) { W.parts[name] = init; }
+    W.ready(function () { W.init(document, name); });
+  };
+})();
+(function () {
+  var BUILT_IN = ['www.youtube-nocookie.com', 'www.youtube.com', 'player.vimeo.com', 'www.google.com'];
+
+  function allowed(el, src) {
+    if (WB.todo(src)) { return null; }
+    var url;
+    try { url = new URL(src); } catch (err) { return null; }
+    if (url.protocol !== 'https:') { return null; }
+    var extra = WB.opt(el, 'allow-hosts', '').split(',').map(function (h) { return h.trim().toLowerCase(); }).filter(Boolean);
+    var host = url.hostname.toLowerCase();
+    if (extra.indexOf(host) >= 0) { return url.href; }
+    if (BUILT_IN.indexOf(host) < 0) { return null; }
+    if (host === 'www.google.com' && url.pathname.indexOf('/maps/embed') !== 0) { return null; }
+    return url.href;
+  }
+
+  WB.define('click-to-load', function (el) {
+    var holder = el.querySelector('[data-wb-placeholder]');
+    var button = el.querySelector('[data-wb-load]');
+    if (!holder || !button) { throw new Error('click-to-load needs [data-wb-placeholder] and [data-wb-load]'); }
+
+    var src = allowed(el, WB.opt(el, 'src', ''));
+    var title = WB.opt(el, 'title', '');
+    if (!src || WB.todo(title)) {
+      button.disabled = true;
+      el.setAttribute('data-wb-state', 'unconfigured');
+      console.warn('[wb click-to-load] Needs an https data-wb-src from an allowed host and a data-wb-title.');
+      return;
+    }
+
+    button.addEventListener('click', function () {
+      var frame = document.createElement('div');
+      frame.className = 'wb-embed__frame';
+      var ratio = WB.opt(el, 'ratio', '16 / 9');
+      frame.style.aspectRatio = /^\d+(\.\d+)?\s*\/\s*\d+(\.\d+)?$/.test(ratio) ? ratio : '16 / 9';
+
+      var iframe = document.createElement('iframe');
+      iframe.src = src;
+      iframe.title = title;
+      iframe.allow = WB.opt(el, 'permissions', 'fullscreen; picture-in-picture; encrypted-media');
+      iframe.setAttribute('allowfullscreen', '');
+      iframe.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin');
+      frame.appendChild(iframe);
+
+      holder.replaceWith(frame);
+      el.setAttribute('data-wb-state', 'loaded');
+      iframe.focus();
+      WB.emit(el, 'embed-loaded', {});
+    });
+  });
+})();
+</script>

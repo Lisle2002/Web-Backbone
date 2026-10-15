@@ -1,0 +1,205 @@
+<style>
+.wb-copy { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.wb-copy__source { padding: 0.35rem 0.6rem; border: 1px solid var(--wb-border, #767676); border-radius: var(--wb-radius, 0.375rem); }
+.wb-copy__button {
+  min-height: 2.5rem; padding: 0.35rem 0.9rem; font: inherit; cursor: pointer; color: var(--wb-accent, #1a56db); background: var(--wb-bg, transparent);
+  border: 1px solid var(--wb-accent, #1a56db); border-radius: var(--wb-radius, 0.375rem);
+}
+.wb-copy__button:focus-visible { outline: 2px solid var(--wb-focus, #005fcc); outline-offset: 2px; }
+.wb-copy__status { min-width: 1px; }
+.wb-copy__field {
+  flex: 1 1 100%; box-sizing: border-box; max-width: 24rem; padding: 0.35rem 0.6rem; font: inherit; color: inherit; background: var(--wb-bg, transparent);
+  border: 1px solid var(--wb-border, #767676); border-radius: var(--wb-radius, 0.375rem); resize: vertical;
+}
+.wb-copy__field:focus-visible { outline: 2px solid var(--wb-focus, #005fcc); outline-offset: 2px; }
+</style>
+
+<span class="wb-copy" data-wb="copy-button" data-wb-done="Copied" data-wb-failed="Press Ctrl+C or Cmd+C to copy">
+  <code class="wb-copy__source" data-wb-source>YOUR_TEXT_TO_COPY</code>
+  <button type="button" class="wb-copy__button" data-wb-button>Copy</button>
+  <span class="wb-copy__status" role="status" aria-live="polite" data-wb-status></span>
+</span>
+
+<script>
+/* ---- wb core 1.1: identical in every component; safe to include more than once ---- */
+(function () {
+  var VERSION = '1.1';
+  var W = (window.WB = window.WB || {});
+  if (W.core) {
+    if (W.core !== VERSION) {
+      console.warn('[wb] Two versions of the wb core are on this page (' + W.core + ' and ' + VERSION + '). The first one loaded is used.');
+    }
+    return;
+  }
+  W.core = VERSION;
+  W.parts = {};
+  W.flags = {};
+  var counter = 0;
+  var starting = [];
+
+  /* Unique id for generated markup, for example "wb-faq-3". An id that is already on the page
+     (for example one your own site uses) is skipped. */
+  W.uid = function (prefix) {
+    var id;
+    do {
+      counter += 1;
+      id = 'wb-' + prefix + '-' + counter;
+    } while (document.getElementById(id));
+    return id;
+  };
+
+  /* Reads data-wb-<key> from an element. Returns fallback when missing or empty. */
+  W.opt = function (el, key, fallback) {
+    var value = el.getAttribute('data-wb-' + key);
+    value = value === null ? '' : value.trim();
+    return value === '' ? fallback : value;
+  };
+
+  /* True when a setting is empty or still contains a YOUR_... placeholder. */
+  W.todo = function (value) {
+    return !value || /YOUR_[A-Z0-9_]+/.test(value);
+  };
+
+  /* Runs fn one time per page for a given key. */
+  W.once = function (key, fn) {
+    if (!W.flags[key]) { W.flags[key] = true; fn(); }
+  };
+
+  /* Dispatches a bubbling "wb:<name>" event from el. */
+  W.emit = function (el, name, detail) {
+    el.dispatchEvent(new CustomEvent('wb:' + name, { bubbles: true, detail: detail || {} }));
+  };
+
+  W.ready = function (fn) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', fn);
+    } else {
+      fn();
+    }
+  };
+
+  /* Starts every [data-wb="<name>"] inside root (root included) that has not started yet.
+     data-wb-ready is set only after the component's start-up finished without an error.
+     If it failed, the element gets data-wb-error (holding the message) and can be started again by
+     fixing the markup and calling WB.init(container). Call WB.init(container) after you insert new
+     markup with JavaScript. */
+  W.init = function (root, only) {
+    root = root || document;
+    Object.keys(W.parts).forEach(function (name) {
+      if (only && only !== name) { return; }
+      var selector = '[data-wb="' + name + '"]';
+      var found = Array.prototype.slice.call(root.querySelectorAll(selector));
+      if (root.nodeType === 1 && root.matches(selector)) { found.unshift(root); }
+      found.forEach(function (el) {
+        if (el.hasAttribute('data-wb-ready') || starting.indexOf(el) >= 0) { return; }
+        starting.push(el);
+        try {
+          W.parts[name](el);
+          el.setAttribute('data-wb-ready', '');
+          el.removeAttribute('data-wb-error');
+        } catch (err) {
+          var message = String((err && err.message) || err);
+          if (el.getAttribute('data-wb-error') !== message) {
+            console.error('[wb ' + name + ']', err);
+          }
+          el.setAttribute('data-wb-error', message);
+        } finally {
+          starting.splice(starting.indexOf(el), 1);
+        }
+      });
+    });
+  };
+
+  /* Registers a component. The first copy of a component on the page wins. */
+  W.define = function (name, init) {
+    if (!W.parts[name]) { W.parts[name] = init; }
+    W.ready(function () { W.init(document, name); });
+  };
+})();
+(function () {
+  /* Old-browser fallback: copy through a temporary text box. Returns true/false. */
+  function legacyCopy(text) {
+    var box = document.createElement('textarea');
+    box.value = text;
+    box.setAttribute('readonly', '');
+    box.style.position = 'fixed';
+    box.style.top = '0';
+    box.style.opacity = '0';
+    document.body.appendChild(box);
+    box.select();
+    var ok = false;
+    try { ok = document.execCommand('copy'); } catch (err) { ok = false; }
+    document.body.removeChild(box);
+    return ok;
+  }
+
+  function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      return navigator.clipboard.writeText(text).then(function () { return true; }, function () { return legacyCopy(text); });
+    }
+    return Promise.resolve(legacyCopy(text));
+  }
+
+  WB.define('copy-button', function (el) {
+    var button = el.querySelector('[data-wb-button]');
+    var status = el.querySelector('[data-wb-status]');
+    var source = el.querySelector('[data-wb-source]');
+    if (!button) { throw new Error('copy-button needs a [data-wb-button] element'); }
+    var timer = null;
+    var field = null;
+
+    /* Takes away the manual-copy box, if one is showing. */
+    function closeField(returnFocus) {
+      if (!field) { return; }
+      var box = field;
+      field = null;
+      if (box.parentNode) { box.parentNode.removeChild(box); }
+      if (status) { status.textContent = ''; }
+      if (returnFocus) { button.focus(); }
+    }
+
+    /* When the browser refuses to copy, show the exact text in a read-only box, selected and focused,
+       so the visitor's own Ctrl+C or Cmd+C copies the right thing (the visible label may differ from data-wb-text). */
+    function showField(text) {
+      closeField(false);
+      var box = document.createElement('textarea');
+      box.className = 'wb-copy__field';
+      box.readOnly = true;
+      box.value = text;
+      box.rows = Math.min(6, text.split(/\r\n|\r|\n/).length);
+      box.setAttribute('aria-label', WB.opt(el, 'field-label', 'Text to copy'));
+      box.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeField(true); }
+      });
+      box.addEventListener('blur', function () {
+        if (field === box && document.hasFocus()) { closeField(false); }
+      });
+      el.appendChild(box);
+      field = box;
+      box.focus();
+      box.select();
+      try { box.setSelectionRange(0, box.value.length); } catch (err) { box.select(); }
+    }
+
+    button.addEventListener('click', function () {
+      closeField(false);
+      var text = el.getAttribute('data-wb-text');
+      if (text === null) { text = source ? source.textContent : ''; }
+      if (!text || WB.todo(text)) {
+        if (status) { status.textContent = 'Nothing to copy yet.'; }
+        console.warn('[wb copy-button] Replace YOUR_TEXT_TO_COPY or set data-wb-text.');
+        return;
+      }
+      copyText(text).then(function (ok) {
+        if (!ok) { showField(text); }
+        if (status) {
+          status.textContent = ok ? WB.opt(el, 'done', 'Copied') : WB.opt(el, 'failed', 'Press Ctrl+C or Cmd+C to copy');
+        }
+        WB.emit(el, ok ? 'copied' : 'copy-failed', {});
+        clearTimeout(timer);
+        timer = setTimeout(function () { if (!field && status && el.isConnected) { status.textContent = ''; } }, 4000);
+      });
+    });
+  });
+})();
+</script>

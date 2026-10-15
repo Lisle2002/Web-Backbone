@@ -1,0 +1,268 @@
+<style>
+.wb-form { max-width: 36rem; }
+.wb-form__row { margin: 0 0 1rem; }
+.wb-form__label { display: block; font-weight: 600; }
+.wb-form__field {
+  display: block; box-sizing: border-box; width: 100%; margin-top: 0.25rem; padding: 0.6rem 0.7rem;
+  font: inherit; color: inherit; background: var(--wb-bg, transparent);
+  border: 1px solid var(--wb-border, #767676); border-radius: var(--wb-radius, 0.375rem);
+}
+.wb-form__field:focus-visible, .wb-form__button:focus-visible, .wb-form__retry:focus-visible {
+  outline: 2px solid var(--wb-focus, #005fcc); outline-offset: 2px;
+}
+.wb-form__button, .wb-form__retry {
+  min-height: 2.75rem; padding: 0.6rem 1.25rem; font: inherit; font-weight: 600; cursor: pointer;
+  color: var(--wb-on-accent, #fff); background: var(--wb-accent, #1a56db);
+  border: 1px solid transparent; border-radius: var(--wb-radius, 0.375rem);
+}
+.wb-form__button[aria-disabled="true"] { opacity: 0.6; cursor: progress; }
+.wb-form__status { margin-top: 1rem; }
+.wb-form__status p { margin: 0 0 0.5rem; padding-left: 0.75rem; border-left: 4px solid var(--wb-border, #767676); }
+.wb-form__status [data-wb-kind="error"] { border-left-color: #b00020; }
+.wb-form__status [data-wb-kind="success"] { border-left-color: #1a7f4b; }
+.wb-form__trap { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
+</style>
+
+<form class="wb-form" data-wb="contact-form"
+      action="https://formspree.io/f/YOUR_FORMSPREE_FORM_ID" method="post"
+      data-wb-provider="formspree"
+      data-wb-success="Thank you. Your message was submitted."
+      data-wb-failure="Your message could not be sent."
+      data-wb-timeout="15000">
+
+  <!-- WEB3FORMS ONLY: set action="https://api.web3forms.com/submit", data-wb-provider="web3forms", and uncomment the next line. -->
+  <!-- <input type="hidden" name="access_key" value="YOUR_WEB3FORMS_ACCESS_KEY"> -->
+
+  <p class="wb-form__row">
+    <label class="wb-form__label">Your name
+      <input class="wb-form__field" type="text" name="name" autocomplete="name" required>
+    </label>
+  </p>
+  <p class="wb-form__row">
+    <label class="wb-form__label">Your email
+      <input class="wb-form__field" type="email" name="email" autocomplete="email" required>
+    </label>
+  </p>
+  <p class="wb-form__row">
+    <label class="wb-form__label">Message
+      <textarea class="wb-form__field" name="message" rows="6" required></textarea>
+    </label>
+  </p>
+
+  <!-- Spam trap for simple bots. FORMSPREE: keep this one. WEB3FORMS: delete it and use the checkbox below. -->
+  <p class="wb-form__trap" aria-hidden="true">
+    <label>Leave this field empty <input type="text" name="_gotcha" tabindex="-1" autocomplete="off"></label>
+  </p>
+  <!-- WEB3FORMS ONLY: <p class="wb-form__trap" aria-hidden="true"><label>Do not tick <input type="checkbox" name="botcheck" tabindex="-1"></label></p> -->
+
+  <p class="wb-form__row"><button class="wb-form__button" type="submit">Send message</button></p>
+  <div class="wb-form__status" role="status" aria-live="polite" data-wb-status></div>
+</form>
+
+<script>
+/* ---- wb core 1.1: identical in every component; safe to include more than once ---- */
+(function () {
+  var VERSION = '1.1';
+  var W = (window.WB = window.WB || {});
+  if (W.core) {
+    if (W.core !== VERSION) {
+      console.warn('[wb] Two versions of the wb core are on this page (' + W.core + ' and ' + VERSION + '). The first one loaded is used.');
+    }
+    return;
+  }
+  W.core = VERSION;
+  W.parts = {};
+  W.flags = {};
+  var counter = 0;
+  var starting = [];
+
+  /* Unique id for generated markup, for example "wb-faq-3". An id that is already on the page
+     (for example one your own site uses) is skipped. */
+  W.uid = function (prefix) {
+    var id;
+    do {
+      counter += 1;
+      id = 'wb-' + prefix + '-' + counter;
+    } while (document.getElementById(id));
+    return id;
+  };
+
+  /* Reads data-wb-<key> from an element. Returns fallback when missing or empty. */
+  W.opt = function (el, key, fallback) {
+    var value = el.getAttribute('data-wb-' + key);
+    value = value === null ? '' : value.trim();
+    return value === '' ? fallback : value;
+  };
+
+  /* True when a setting is empty or still contains a YOUR_... placeholder. */
+  W.todo = function (value) {
+    return !value || /YOUR_[A-Z0-9_]+/.test(value);
+  };
+
+  /* Runs fn one time per page for a given key. */
+  W.once = function (key, fn) {
+    if (!W.flags[key]) { W.flags[key] = true; fn(); }
+  };
+
+  /* Dispatches a bubbling "wb:<name>" event from el. */
+  W.emit = function (el, name, detail) {
+    el.dispatchEvent(new CustomEvent('wb:' + name, { bubbles: true, detail: detail || {} }));
+  };
+
+  W.ready = function (fn) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', fn);
+    } else {
+      fn();
+    }
+  };
+
+  /* Starts every [data-wb="<name>"] inside root (root included) that has not started yet.
+     data-wb-ready is set only after the component's start-up finished without an error.
+     If it failed, the element gets data-wb-error (holding the message) and can be started again by
+     fixing the markup and calling WB.init(container). Call WB.init(container) after you insert new
+     markup with JavaScript. */
+  W.init = function (root, only) {
+    root = root || document;
+    Object.keys(W.parts).forEach(function (name) {
+      if (only && only !== name) { return; }
+      var selector = '[data-wb="' + name + '"]';
+      var found = Array.prototype.slice.call(root.querySelectorAll(selector));
+      if (root.nodeType === 1 && root.matches(selector)) { found.unshift(root); }
+      found.forEach(function (el) {
+        if (el.hasAttribute('data-wb-ready') || starting.indexOf(el) >= 0) { return; }
+        starting.push(el);
+        try {
+          W.parts[name](el);
+          el.setAttribute('data-wb-ready', '');
+          el.removeAttribute('data-wb-error');
+        } catch (err) {
+          var message = String((err && err.message) || err);
+          if (el.getAttribute('data-wb-error') !== message) {
+            console.error('[wb ' + name + ']', err);
+          }
+          el.setAttribute('data-wb-error', message);
+        } finally {
+          starting.splice(starting.indexOf(el), 1);
+        }
+      });
+    });
+  };
+
+  /* Registers a component. The first copy of a component on the page wins. */
+  W.define = function (name, init) {
+    if (!W.parts[name]) { W.parts[name] = init; }
+    W.ready(function () { W.init(document, name); });
+  };
+})();
+(function () {
+  function providerMessage(json) {
+    if (!json || typeof json !== 'object') { return ''; }
+    var text = json.error || (json.errors && json.errors[0] && json.errors[0].message) || json.message;
+    return typeof text === 'string' ? text.slice(0, 200) : '';
+  }
+
+  WB.define('contact-form', function (form) {
+    var provider = WB.opt(form, 'provider', 'formspree');
+    var endpoint = form.getAttribute('action') || '';
+    var status = form.querySelector('[data-wb-status]');
+    var button = form.querySelector('button[type="submit"], input[type="submit"]');
+    var timeout = parseInt(WB.opt(form, 'timeout', '15000'), 10) || 15000;
+    var successText = WB.opt(form, 'success', 'Thank you. Your message was submitted.');
+    var failureText = WB.opt(form, 'failure', 'Your message could not be sent.');
+    var busy = false;
+
+    if (!status || !button) { throw new Error('contact-form needs a [data-wb-status] element and a submit button'); }
+
+    if (WB.todo(endpoint) || !/^https:\/\//i.test(endpoint)) {
+      form.setAttribute('data-wb-state', 'unconfigured');
+      console.warn('[wb contact-form] Set the form action to your https:// form-service endpoint.');
+    }
+
+    function show(kind, text, withRetry) {
+      status.textContent = '';
+      var p = document.createElement('p');
+      p.setAttribute('data-wb-kind', kind);
+      p.textContent = text;
+      status.appendChild(p);
+      if (withRetry) {
+        var retry = document.createElement('button');
+        retry.type = 'button';
+        retry.className = 'wb-form__retry';
+        retry.textContent = 'Try again';
+        retry.addEventListener('click', function () {
+          if (typeof form.requestSubmit === 'function') { form.requestSubmit(button); } else { button.click(); }
+        });
+        status.appendChild(retry);
+      }
+    }
+
+    function finish() {
+      busy = false;
+      button.removeAttribute('aria-disabled');
+      form.removeAttribute('aria-busy');
+    }
+
+    function send() {
+      busy = true;
+      button.setAttribute('aria-disabled', 'true');
+      form.setAttribute('aria-busy', 'true');
+      show('info', 'Sending…', false);
+
+      var controller = new AbortController();
+      var timer = setTimeout(function () { controller.abort(); }, timeout);
+
+      fetch(endpoint, {
+        method: 'POST',
+        body: new FormData(form),
+        headers: { Accept: 'application/json' },
+        credentials: 'omit',
+        signal: controller.signal
+      }).then(function (response) {
+        return response.text().then(function (text) {
+          var json = null;
+          try { json = JSON.parse(text); } catch (err) { json = null; }
+          return { ok: response.ok, json: json };
+        });
+      }).then(function (result) {
+        var accepted = result.ok && (provider !== 'web3forms' || (result.json && result.json.success === true));
+        if (!accepted) {
+          var detail = providerMessage(result.json);
+          throw new Error(detail || 'The form service did not accept the message.');
+        }
+        form.reset();
+        show('success', successText, false);
+        WB.emit(form, 'form-sent', { provider: provider });
+      }).catch(function (err) {
+        var timedOut = err && err.name === 'AbortError';
+        var why = timedOut ? 'The request took too long.' : (err && err.message ? err.message : 'Check your connection.');
+        show('error', failureText + ' ' + why, true);
+        WB.emit(form, 'form-error', { provider: provider });
+      }).then(function () {
+        clearTimeout(timer);
+        finish();
+      });
+    }
+
+    form.addEventListener('submit', function (event) {
+      var canEnhance = window.fetch && window.FormData && window.AbortController;
+      if (!canEnhance) { return; }      /* the browser submits the form normally */
+      event.preventDefault();
+      if (busy) { return; }
+      if (WB.todo(endpoint) || !/^https:\/\//i.test(endpoint)) {
+        show('error', 'This form is not connected to a form service yet.', false);
+        return;
+      }
+      if (provider === 'web3forms') {
+        var key = form.querySelector('input[name="access_key"]');
+        if (!key || WB.todo(key.value)) {
+          show('error', 'This form is missing its Web3Forms access key.', false);
+          return;
+        }
+      }
+      if (!form.checkValidity()) { form.reportValidity(); return; }
+      send();
+    });
+  });
+})();
+</script>

@@ -1,0 +1,282 @@
+<style>
+.wb-calendly__frame { min-width: 320px; margin: 0.5rem 0; }
+.wb-calendly__status { margin: 0.5rem 0; }
+.wb-calendly__button { cursor: pointer; }
+.wb-calendly a:focus-visible, .wb-calendly__button:focus-visible { outline: 2px solid var(--wb-focus, #005fcc); outline-offset: 2px; }
+</style>
+
+<!-- INLINE: the calendar appears inside this box. -->
+<div class="wb-calendly" data-wb="calendly" data-wb-mode="inline" data-wb-height="700" data-wb-load="visible">
+  <p class="wb-calendly__fallback"><a href="https://calendly.com/YOUR_CALENDLY_USER/YOUR_EVENT_TYPE">Book a time on Calendly</a></p>
+</div>
+
+<!-- POPUP: use this instead (the link itself is the component). -->
+<!--
+<a class="wb-calendly" data-wb="calendly" data-wb-mode="popup"
+   href="https://calendly.com/YOUR_CALENDLY_USER/YOUR_EVENT_TYPE">Book a time</a>
+-->
+
+<script>
+/* ---- wb core 1.1: identical in every component; safe to include more than once ---- */
+(function () {
+  var VERSION = '1.1';
+  var W = (window.WB = window.WB || {});
+  if (W.core) {
+    if (W.core !== VERSION) {
+      console.warn('[wb] Two versions of the wb core are on this page (' + W.core + ' and ' + VERSION + '). The first one loaded is used.');
+    }
+    return;
+  }
+  W.core = VERSION;
+  W.parts = {};
+  W.flags = {};
+  var counter = 0;
+  var starting = [];
+
+  /* Unique id for generated markup, for example "wb-faq-3". An id that is already on the page
+     (for example one your own site uses) is skipped. */
+  W.uid = function (prefix) {
+    var id;
+    do {
+      counter += 1;
+      id = 'wb-' + prefix + '-' + counter;
+    } while (document.getElementById(id));
+    return id;
+  };
+
+  /* Reads data-wb-<key> from an element. Returns fallback when missing or empty. */
+  W.opt = function (el, key, fallback) {
+    var value = el.getAttribute('data-wb-' + key);
+    value = value === null ? '' : value.trim();
+    return value === '' ? fallback : value;
+  };
+
+  /* True when a setting is empty or still contains a YOUR_... placeholder. */
+  W.todo = function (value) {
+    return !value || /YOUR_[A-Z0-9_]+/.test(value);
+  };
+
+  /* Runs fn one time per page for a given key. */
+  W.once = function (key, fn) {
+    if (!W.flags[key]) { W.flags[key] = true; fn(); }
+  };
+
+  /* Dispatches a bubbling "wb:<name>" event from el. */
+  W.emit = function (el, name, detail) {
+    el.dispatchEvent(new CustomEvent('wb:' + name, { bubbles: true, detail: detail || {} }));
+  };
+
+  W.ready = function (fn) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', fn);
+    } else {
+      fn();
+    }
+  };
+
+  /* Starts every [data-wb="<name>"] inside root (root included) that has not started yet.
+     data-wb-ready is set only after the component's start-up finished without an error.
+     If it failed, the element gets data-wb-error (holding the message) and can be started again by
+     fixing the markup and calling WB.init(container). Call WB.init(container) after you insert new
+     markup with JavaScript. */
+  W.init = function (root, only) {
+    root = root || document;
+    Object.keys(W.parts).forEach(function (name) {
+      if (only && only !== name) { return; }
+      var selector = '[data-wb="' + name + '"]';
+      var found = Array.prototype.slice.call(root.querySelectorAll(selector));
+      if (root.nodeType === 1 && root.matches(selector)) { found.unshift(root); }
+      found.forEach(function (el) {
+        if (el.hasAttribute('data-wb-ready') || starting.indexOf(el) >= 0) { return; }
+        starting.push(el);
+        try {
+          W.parts[name](el);
+          el.setAttribute('data-wb-ready', '');
+          el.removeAttribute('data-wb-error');
+        } catch (err) {
+          var message = String((err && err.message) || err);
+          if (el.getAttribute('data-wb-error') !== message) {
+            console.error('[wb ' + name + ']', err);
+          }
+          el.setAttribute('data-wb-error', message);
+        } finally {
+          starting.splice(starting.indexOf(el), 1);
+        }
+      });
+    });
+  };
+
+  /* Registers a component. The first copy of a component on the page wins. */
+  W.define = function (name, init) {
+    if (!W.parts[name]) { W.parts[name] = init; }
+    W.ready(function () { W.init(document, name); });
+  };
+})();
+(function () {
+  var SCRIPT = 'https://assets.calendly.com/assets/external/widget.js';
+  var STYLE = 'https://assets.calendly.com/assets/external/widget.css';
+  var ORIGIN = 'https://calendly.com';
+  var LOAD_MS = 10000; /* the longest we wait for Calendly's script, in milliseconds */
+  var activePopup = null;
+
+  function validUrl(value) {
+    if (WB.todo(value)) { return null; }
+    try {
+      var u = new URL(value, location.href);
+      var host = u.hostname.toLowerCase();
+      var ok = u.protocol === 'https:' && (host === 'calendly.com' || /\.calendly\.com$/.test(host));
+      return ok ? u.href : null;
+    } catch (err) { return null; }
+  }
+
+  function waitFor(test, ms) {
+    return new Promise(function (resolve, reject) {
+      var started = Date.now();
+      (function poll() {
+        if (test()) { resolve(); } else if (Date.now() - started > ms) { reject(new Error('timeout')); } else { setTimeout(poll, 100); }
+      })();
+    });
+  }
+
+  /* Gives up on a promise that neither finishes nor fails (for example a request that stalls). */
+  function withTimeout(promise, ms) {
+    return new Promise(function (resolve, reject) {
+      var timer = setTimeout(function () { reject(new Error('timeout')); }, ms);
+      promise.then(function (value) { clearTimeout(timer); resolve(value); }, function (err) { clearTimeout(timer); reject(err); });
+    });
+  }
+
+  /* Loads Calendly's files one time per page, even if several components ask.
+     Waits at most LOAD_MS in total; after that the caller uses its fallback. */
+  function loadCalendly() {
+    if (window.Calendly) { return Promise.resolve(window.Calendly); }
+    if (WB.calendlyLoading) { return WB.calendlyLoading; }
+    if (!document.querySelector('link[href^="' + STYLE + '"]')) {
+      var css = document.createElement('link');
+      css.rel = 'stylesheet';
+      css.href = STYLE;
+      document.head.appendChild(css);
+    }
+    var existing = document.querySelector('script[src^="' + SCRIPT + '"]');
+    var wait;
+    if (existing) {
+      wait = waitFor(function () { return !!window.Calendly; }, LOAD_MS);
+    } else {
+      wait = new Promise(function (resolve, reject) {
+        var s = document.createElement('script');
+        s.src = SCRIPT;
+        s.async = true;
+        s.onload = resolve;
+        s.onerror = function () { s.remove(); reject(new Error('blocked or unreachable')); };
+        document.head.appendChild(s);
+      }).then(function () { return waitFor(function () { return !!window.Calendly; }, LOAD_MS); });
+    }
+    /* A script tag that is still loading is left in place when we give up: if it arrives later,
+       window.Calendly exists and the next attempt works at once. */
+    WB.calendlyLoading = withTimeout(wait, LOAD_MS).then(function () { return window.Calendly; });
+    WB.calendlyLoading.catch(function () { WB.calendlyLoading = null; });
+    return WB.calendlyLoading;
+  }
+
+  /* Calendly tells the page when a booking is made. Only messages from Calendly itself are used,
+     and no booking details are passed on. */
+  function listenForBookings() {
+    window.addEventListener('message', function (event) {
+      if (event.origin !== ORIGIN || !event.data || event.data.event !== 'calendly.event_scheduled') { return; }
+      var roots = document.querySelectorAll('[data-wb="calendly"]');
+      var target = null;
+      Array.prototype.forEach.call(roots, function (root) {
+        var frame = root.querySelector('iframe');
+        if (frame && frame.contentWindow === event.source) { target = root; }
+      });
+      WB.emit(target || activePopup || document.documentElement, 'calendly-scheduled', {});
+    });
+  }
+
+  function setup(el) {
+    var mode = WB.opt(el, 'mode', 'inline');
+    var link = el.tagName === 'A' ? el : el.querySelector('a[href]');
+    var url = validUrl(WB.opt(el, 'url', link ? link.getAttribute('href') : ''));
+    if (!url) {
+      el.setAttribute('data-wb-state', 'unconfigured');
+      console.warn('[wb calendly] Set the link to your https://calendly.com/... scheduling page.');
+      return;
+    }
+    WB.once('calendly-message', listenForBookings);
+
+    if (mode === 'popup') {
+      var waiting = false;
+      el.addEventListener('click', function (event) {
+        if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) { return; }
+        event.preventDefault();
+        if (waiting) { return; }
+        waiting = true;
+        activePopup = el;
+        el.setAttribute('data-wb-state', 'loading');
+        el.setAttribute('aria-busy', 'true');
+        function finished() {
+          waiting = false;
+          el.setAttribute('data-wb-state', 'ready');
+          el.removeAttribute('aria-busy');
+        }
+        loadCalendly().then(function (Calendly) {
+          finished();
+          Calendly.initPopupWidget({ url: url });
+        }).catch(function () {
+          finished();
+          window.location.assign(url);
+        });
+      });
+      el.setAttribute('data-wb-state', 'ready');
+      return;
+    }
+
+    /* inline */
+    var frame = document.createElement('div');
+    frame.className = 'wb-calendly__frame';
+    var height = parseInt(WB.opt(el, 'height', '700'), 10);
+    frame.style.height = (height >= 300 && height <= 2400 ? height : 700) + 'px';
+    var status = document.createElement('p');
+    status.className = 'wb-calendly__status';
+    status.setAttribute('role', 'status');
+    el.insertBefore(frame, el.firstChild);
+    el.insertBefore(status, frame);
+    var started = false;
+
+    function start() {
+      if (started) { return; }
+      started = true;
+      status.textContent = 'Loading the booking calendar…';
+      loadCalendly().then(function (Calendly) {
+        status.textContent = '';
+        Calendly.initInlineWidget({ url: url, parentElement: frame });
+        el.setAttribute('data-wb-state', 'ready');
+      }).catch(function () {
+        started = false;
+        frame.hidden = true;
+        status.textContent = 'The booking calendar could not load. Use the link below to book on Calendly.';
+        el.setAttribute('data-wb-state', 'failed');
+      });
+    }
+
+    var when = WB.opt(el, 'load', 'visible');
+    if (when === 'click') {
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'wb-calendly__button';
+      button.textContent = 'Show booking calendar';
+      button.addEventListener('click', function () { button.remove(); start(); });
+      el.insertBefore(button, el.firstChild);
+    } else if (when === 'visible' && 'IntersectionObserver' in window) {
+      var observer = new IntersectionObserver(function (entries) {
+        if (entries.some(function (entry) { return entry.isIntersecting; })) { observer.disconnect(); start(); }
+      }, { rootMargin: '200px' });
+      observer.observe(el);
+    } else {
+      start();
+    }
+  }
+
+  WB.define('calendly', setup);
+})();
+</script>

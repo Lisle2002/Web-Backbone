@@ -1,0 +1,296 @@
+<style>
+.wb-data__scroll { overflow-x: auto; max-width: 100%; }
+.wb-data table { border-collapse: collapse; width: 100%; }
+.wb-data caption { padding: 0.5rem 0; text-align: left; font-weight: 600; }
+.wb-data th, .wb-data td { padding: 0.5rem 0.75rem; text-align: left; vertical-align: top; border-bottom: 1px solid var(--wb-border, #c4c4c4); }
+.wb-data th { border-bottom-width: 2px; }
+.wb-data__status { margin: 0.5rem 0; }
+.wb-data__retry {
+  min-height: 2.5rem; padding: 0.4rem 0.9rem; font: inherit; cursor: pointer; color: var(--wb-accent, #1a56db); background: var(--wb-bg, transparent);
+  border: 1px solid var(--wb-accent, #1a56db); border-radius: var(--wb-radius, 0.375rem);
+}
+.wb-data__scroll:focus-visible, .wb-data__retry:focus-visible { outline: 2px solid var(--wb-focus, #005fcc); outline-offset: 2px; }
+</style>
+
+<div class="wb-data" data-wb="data-table"
+     data-wb-src="data/YOUR_FILE.csv"
+     data-wb-format="auto"
+     data-wb-columns=""
+     data-wb-caption="YOUR_TABLE_TITLE"
+     data-wb-empty="There is nothing to show yet.">
+  <p class="wb-data__status" role="status" aria-live="polite" data-wb-status>Loading…</p>
+  <div data-wb-output></div>
+</div>
+
+<script>
+/* ---- wb core 1.1: identical in every component; safe to include more than once ---- */
+(function () {
+  var VERSION = '1.1';
+  var W = (window.WB = window.WB || {});
+  if (W.core) {
+    if (W.core !== VERSION) {
+      console.warn('[wb] Two versions of the wb core are on this page (' + W.core + ' and ' + VERSION + '). The first one loaded is used.');
+    }
+    return;
+  }
+  W.core = VERSION;
+  W.parts = {};
+  W.flags = {};
+  var counter = 0;
+  var starting = [];
+
+  /* Unique id for generated markup, for example "wb-faq-3". An id that is already on the page
+     (for example one your own site uses) is skipped. */
+  W.uid = function (prefix) {
+    var id;
+    do {
+      counter += 1;
+      id = 'wb-' + prefix + '-' + counter;
+    } while (document.getElementById(id));
+    return id;
+  };
+
+  /* Reads data-wb-<key> from an element. Returns fallback when missing or empty. */
+  W.opt = function (el, key, fallback) {
+    var value = el.getAttribute('data-wb-' + key);
+    value = value === null ? '' : value.trim();
+    return value === '' ? fallback : value;
+  };
+
+  /* True when a setting is empty or still contains a YOUR_... placeholder. */
+  W.todo = function (value) {
+    return !value || /YOUR_[A-Z0-9_]+/.test(value);
+  };
+
+  /* Runs fn one time per page for a given key. */
+  W.once = function (key, fn) {
+    if (!W.flags[key]) { W.flags[key] = true; fn(); }
+  };
+
+  /* Dispatches a bubbling "wb:<name>" event from el. */
+  W.emit = function (el, name, detail) {
+    el.dispatchEvent(new CustomEvent('wb:' + name, { bubbles: true, detail: detail || {} }));
+  };
+
+  W.ready = function (fn) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', fn);
+    } else {
+      fn();
+    }
+  };
+
+  /* Starts every [data-wb="<name>"] inside root (root included) that has not started yet.
+     data-wb-ready is set only after the component's start-up finished without an error.
+     If it failed, the element gets data-wb-error (holding the message) and can be started again by
+     fixing the markup and calling WB.init(container). Call WB.init(container) after you insert new
+     markup with JavaScript. */
+  W.init = function (root, only) {
+    root = root || document;
+    Object.keys(W.parts).forEach(function (name) {
+      if (only && only !== name) { return; }
+      var selector = '[data-wb="' + name + '"]';
+      var found = Array.prototype.slice.call(root.querySelectorAll(selector));
+      if (root.nodeType === 1 && root.matches(selector)) { found.unshift(root); }
+      found.forEach(function (el) {
+        if (el.hasAttribute('data-wb-ready') || starting.indexOf(el) >= 0) { return; }
+        starting.push(el);
+        try {
+          W.parts[name](el);
+          el.setAttribute('data-wb-ready', '');
+          el.removeAttribute('data-wb-error');
+        } catch (err) {
+          var message = String((err && err.message) || err);
+          if (el.getAttribute('data-wb-error') !== message) {
+            console.error('[wb ' + name + ']', err);
+          }
+          el.setAttribute('data-wb-error', message);
+        } finally {
+          starting.splice(starting.indexOf(el), 1);
+        }
+      });
+    });
+  };
+
+  /* Registers a component. The first copy of a component on the page wins. */
+  W.define = function (name, init) {
+    if (!W.parts[name]) { W.parts[name] = init; }
+    W.ready(function () { W.init(document, name); });
+  };
+})();
+(function () {
+  /* Reads CSV as defined by RFC 4180: quoted cells may contain commas, doubled quotes and line breaks. */
+  function parseCsv(text, delimiter) {
+    if (text.charCodeAt(0) === 0xFEFF) { text = text.slice(1); }
+    var rows = [], row = [], field = '', quoted = false;
+    for (var i = 0; i < text.length; i++) {
+      var c = text.charAt(i);
+      if (quoted) {
+        if (c === '"') {
+          if (text.charAt(i + 1) === '"') { field += '"'; i++; } else { quoted = false; }
+        } else { field += c; }
+      } else if (c === '"' && field === '') {
+        quoted = true;
+      } else if (c === delimiter) {
+        row.push(field); field = '';
+      } else if (c === '\n' || c === '\r') {
+        if (c === '\r' && text.charAt(i + 1) === '\n') { i++; }
+        row.push(field); rows.push(row); row = []; field = '';
+      } else { field += c; }
+    }
+    if (quoted) { throw new Error('The CSV file has a quote that is never closed.'); }
+    if (field !== '' || row.length) { row.push(field); rows.push(row); }
+    return rows.filter(function (r) { return !(r.length === 1 && r[0] === ''); });
+  }
+
+  function pick(data, path) {
+    if (!path) { return data; }
+    return path.split('.').reduce(function (obj, key) { return obj && typeof obj === 'object' ? obj[key] : undefined; }, data);
+  }
+
+  function cell(value) {
+    if (value === null || value === undefined) { return ''; }
+    return typeof value === 'object' ? JSON.stringify(value) : String(value);
+  }
+
+  /* Returns {columns: [{key,label}], rows: [[text,...]]} */
+  function toTable(el, text, type) {
+    var wanted = WB.opt(el, 'columns', '').split(',').map(function (c) {
+      var bits = c.split(':');
+      return { key: bits[0].trim(), label: (bits.slice(1).join(':') || bits[0]).trim() };
+    }).filter(function (c) { return c.key; });
+    var keys, records;
+
+    if (type === 'csv') {
+      var grid = parseCsv(text, WB.opt(el, 'delimiter', ',') === 'tab' ? '\t' : WB.opt(el, 'delimiter', ','));
+      if (!grid.length) { return { columns: [], rows: [] }; }
+      keys = grid[0].map(function (h) { return h.trim(); });
+      records = grid.slice(1).map(function (r) {
+        var o = {};
+        keys.forEach(function (k, i) { o[k] = r[i] === undefined ? '' : r[i]; });
+        return o;
+      });
+    } else {
+      var data = pick(JSON.parse(text), WB.opt(el, 'path', ''));
+      if (!Array.isArray(data)) { throw new Error('The JSON file does not contain a list of rows' + (WB.opt(el, 'path', '') ? ' at "' + WB.opt(el, 'path', '') + '".' : '.')); }
+      records = data.map(function (r) { return r && typeof r === 'object' && !Array.isArray(r) ? r : { value: r }; });
+      keys = [];
+      records.slice(0, 50).forEach(function (r) { Object.keys(r).forEach(function (k) { if (keys.indexOf(k) < 0) { keys.push(k); } }); });
+    }
+    var columns = wanted.length ? wanted : keys.map(function (k) { return { key: k, label: k }; });
+    return {
+      columns: columns,
+      rows: records.map(function (r) { return columns.map(function (c) { return cell(r[c.key]); }); })
+    };
+  }
+
+  function detect(el, src, contentType, text) {
+    var format = WB.opt(el, 'format', 'auto');
+    if (format === 'csv' || format === 'json') { return format; }
+    if (/\.json(\?|#|$)/i.test(src) || /json/i.test(contentType || '')) { return 'json'; }
+    if (/\.csv(\?|#|$)/i.test(src) || /csv/i.test(contentType || '')) { return 'csv'; }
+    return /^\s*[\[{]/.test(text) ? 'json' : 'csv';
+  }
+
+  WB.define('data-table', function (el) {
+    var status = el.querySelector('[data-wb-status]');
+    var output = el.querySelector('[data-wb-output]');
+    var src = WB.opt(el, 'src', '');
+    if (!status || !output) { throw new Error('data-table needs [data-wb-status] and [data-wb-output]'); }
+    if (WB.todo(src)) {
+      el.setAttribute('data-wb-state', 'unconfigured');
+      status.textContent = 'This table has no data source yet.';
+      console.warn('[wb data-table] Set data-wb-src to your CSV or JSON file.');
+      return;
+    }
+    var timeout = parseInt(WB.opt(el, 'timeout', '12000'), 10) || 12000;
+    var maxRows = parseInt(WB.opt(el, 'max-rows', '500'), 10) || 500;
+    var token = 0;
+
+    function setState(state, message, retry) {
+      el.setAttribute('data-wb-state', state);
+      el.setAttribute('aria-busy', state === 'loading' ? 'true' : 'false');
+      status.textContent = '';
+      if (message) { status.appendChild(document.createTextNode(message)); }
+      if (retry) {
+        status.appendChild(document.createTextNode(' '));
+        var button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'wb-data__retry';
+        button.textContent = 'Try again';
+        button.addEventListener('click', function () { load(true); });
+        status.appendChild(button);
+      }
+    }
+
+    function draw(table) {
+      output.textContent = '';
+      var wrap = document.createElement('div');
+      wrap.className = 'wb-data__scroll';
+      wrap.tabIndex = 0;
+      wrap.setAttribute('role', 'region');
+      var caption = WB.opt(el, 'caption', '');
+      wrap.setAttribute('aria-label', caption && !WB.todo(caption) ? caption : 'Data table');
+      var t = document.createElement('table');
+      if (caption && !WB.todo(caption)) {
+        var cap = document.createElement('caption');
+        cap.textContent = caption;
+        t.appendChild(cap);
+      }
+      var thead = document.createElement('thead');
+      var hr = document.createElement('tr');
+      table.columns.forEach(function (c) {
+        var th = document.createElement('th');
+        th.scope = 'col';
+        th.textContent = c.label;
+        hr.appendChild(th);
+      });
+      thead.appendChild(hr);
+      t.appendChild(thead);
+      var tbody = document.createElement('tbody');
+      table.rows.slice(0, maxRows).forEach(function (r) {
+        var tr = document.createElement('tr');
+        r.forEach(function (v) {
+          var td = document.createElement('td');
+          td.textContent = v;
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      });
+      t.appendChild(tbody);
+      wrap.appendChild(t);
+      output.appendChild(wrap);
+    }
+
+    function load(fresh) {
+      var mine = ++token;
+      output.textContent = '';
+      setState('loading', 'Loading…', false);
+      var controller = new AbortController();
+      var timer = setTimeout(function () { controller.abort(); }, timeout);
+      fetch(src, { credentials: 'omit', cache: fresh ? 'reload' : 'default', signal: controller.signal }).then(function (response) {
+        if (!response.ok) { throw new Error('The server answered ' + response.status + '.'); }
+        return response.text().then(function (text) { return { text: text, type: response.headers.get('content-type') }; });
+      }).then(function (result) {
+        if (mine !== token) { return; }
+        var table = toTable(el, result.text, detect(el, src, result.type, result.text));
+        if (!table.rows.length) {
+          setState('empty', WB.opt(el, 'empty', 'There is nothing to show yet.'), false);
+          return;
+        }
+        draw(table);
+        var more = table.rows.length > maxRows ? 'Showing the first ' + maxRows + ' of ' + table.rows.length + ' rows.' : '';
+        setState('ready', more, false);
+        WB.emit(el, 'data-loaded', { rows: Math.min(table.rows.length, maxRows) });
+      }).catch(function (err) {
+        if (mine !== token) { return; }
+        var why = err && err.name === 'AbortError' ? 'The request took too long.' : (err && err.message ? err.message : 'Check your connection.');
+        setState('error', 'The data could not be loaded. ' + why, true);
+        WB.emit(el, 'data-error', {});
+      }).then(function () { clearTimeout(timer); });
+    }
+
+    load(false);
+  });
+})();
+</script>

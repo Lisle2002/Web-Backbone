@@ -1,0 +1,270 @@
+<style>
+.wb-gallery__grid {
+  list-style: none; margin: 0; padding: 0; display: grid; gap: var(--wb-gap, 0.75rem);
+  grid-template-columns: repeat(auto-fill, minmax(var(--wb-gallery-min, 10rem), 1fr));
+}
+.wb-gallery__grid a { display: block; }
+.wb-gallery__grid img { display: block; width: 100%; height: auto; border-radius: var(--wb-radius, 0.25rem); }
+.wb-gallery a:focus-visible, .wb-gallery button:focus-visible { outline: 3px solid var(--wb-focus, #005fcc); outline-offset: 2px; }
+
+.wb-gallery__dialog {
+  box-sizing: border-box; width: min(64rem, 100vw - 1rem); max-width: none; max-height: 100vh; padding: 0.75rem; overflow: auto;
+  color: var(--wb-text, #fff); background: var(--wb-lightbox-bg, #111); border: 0; border-radius: var(--wb-radius, 0.5rem);
+}
+.wb-gallery__dialog::backdrop { background: rgba(0, 0, 0, 0.8); }
+.wb-gallery__dialog { touch-action: pan-y; }
+.wb-gallery__stage { margin: 0; text-align: center; touch-action: pan-y; }
+.wb-gallery__stage img { max-width: 100%; max-height: 75vh; object-fit: contain; }
+.wb-gallery__caption { margin: 0.5rem 0 0; min-height: 1.5em; }
+.wb-gallery__bar { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-top: 0.5rem; }
+.wb-gallery__btn {
+  min-width: 2.75rem; min-height: 2.75rem; padding: 0.25rem 0.9rem; font: inherit; font-size: 1.1rem; cursor: pointer;
+  color: inherit; background: transparent; border: 1px solid currentColor; border-radius: var(--wb-radius, 0.375rem);
+}
+.wb-gallery__btn[hidden] { display: none; }
+.wb-gallery__status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.wb-gallery__dialog .wb-gallery__btn:focus-visible { outline-color: #fff; }
+</style>
+
+<div class="wb-gallery" data-wb="gallery" data-wb-loop="true" data-wb-label="YOUR_GALLERY_NAME">
+  <ul class="wb-gallery__grid">
+    <li><a href="images/YOUR_PHOTO_1.jpg" data-wb-caption="YOUR_CAPTION_1"><img src="images/YOUR_PHOTO_1-thumb.jpg" width="400" height="300" alt="YOUR_ALT_TEXT_1" loading="lazy"></a></li>
+    <li><a href="images/YOUR_PHOTO_2.jpg" data-wb-caption="YOUR_CAPTION_2"><img src="images/YOUR_PHOTO_2-thumb.jpg" width="400" height="300" alt="YOUR_ALT_TEXT_2" loading="lazy"></a></li>
+    <li><a href="images/YOUR_PHOTO_3.jpg"><img src="images/YOUR_PHOTO_3-thumb.jpg" width="400" height="300" alt="YOUR_ALT_TEXT_3" loading="lazy"></a></li>
+  </ul>
+</div>
+
+<script>
+/* ---- wb core 1.1: identical in every component; safe to include more than once ---- */
+(function () {
+  var VERSION = '1.1';
+  var W = (window.WB = window.WB || {});
+  if (W.core) {
+    if (W.core !== VERSION) {
+      console.warn('[wb] Two versions of the wb core are on this page (' + W.core + ' and ' + VERSION + '). The first one loaded is used.');
+    }
+    return;
+  }
+  W.core = VERSION;
+  W.parts = {};
+  W.flags = {};
+  var counter = 0;
+  var starting = [];
+
+  /* Unique id for generated markup, for example "wb-faq-3". An id that is already on the page
+     (for example one your own site uses) is skipped. */
+  W.uid = function (prefix) {
+    var id;
+    do {
+      counter += 1;
+      id = 'wb-' + prefix + '-' + counter;
+    } while (document.getElementById(id));
+    return id;
+  };
+
+  /* Reads data-wb-<key> from an element. Returns fallback when missing or empty. */
+  W.opt = function (el, key, fallback) {
+    var value = el.getAttribute('data-wb-' + key);
+    value = value === null ? '' : value.trim();
+    return value === '' ? fallback : value;
+  };
+
+  /* True when a setting is empty or still contains a YOUR_... placeholder. */
+  W.todo = function (value) {
+    return !value || /YOUR_[A-Z0-9_]+/.test(value);
+  };
+
+  /* Runs fn one time per page for a given key. */
+  W.once = function (key, fn) {
+    if (!W.flags[key]) { W.flags[key] = true; fn(); }
+  };
+
+  /* Dispatches a bubbling "wb:<name>" event from el. */
+  W.emit = function (el, name, detail) {
+    el.dispatchEvent(new CustomEvent('wb:' + name, { bubbles: true, detail: detail || {} }));
+  };
+
+  W.ready = function (fn) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', fn);
+    } else {
+      fn();
+    }
+  };
+
+  /* Starts every [data-wb="<name>"] inside root (root included) that has not started yet.
+     data-wb-ready is set only after the component's start-up finished without an error.
+     If it failed, the element gets data-wb-error (holding the message) and can be started again by
+     fixing the markup and calling WB.init(container). Call WB.init(container) after you insert new
+     markup with JavaScript. */
+  W.init = function (root, only) {
+    root = root || document;
+    Object.keys(W.parts).forEach(function (name) {
+      if (only && only !== name) { return; }
+      var selector = '[data-wb="' + name + '"]';
+      var found = Array.prototype.slice.call(root.querySelectorAll(selector));
+      if (root.nodeType === 1 && root.matches(selector)) { found.unshift(root); }
+      found.forEach(function (el) {
+        if (el.hasAttribute('data-wb-ready') || starting.indexOf(el) >= 0) { return; }
+        starting.push(el);
+        try {
+          W.parts[name](el);
+          el.setAttribute('data-wb-ready', '');
+          el.removeAttribute('data-wb-error');
+        } catch (err) {
+          var message = String((err && err.message) || err);
+          if (el.getAttribute('data-wb-error') !== message) {
+            console.error('[wb ' + name + ']', err);
+          }
+          el.setAttribute('data-wb-error', message);
+        } finally {
+          starting.splice(starting.indexOf(el), 1);
+        }
+      });
+    });
+  };
+
+  /* Registers a component. The first copy of a component on the page wins. */
+  W.define = function (name, init) {
+    if (!W.parts[name]) { W.parts[name] = init; }
+    W.ready(function () { W.init(document, name); });
+  };
+})();
+(function () {
+  function safeHref(link) {
+    try {
+      var u = new URL(link.getAttribute('href'), location.href);
+      /* Only web addresses are allowed. A page opened from disk may also use files on disk. */
+      var allowed = u.protocol === 'https:' || u.protocol === 'http:' || (u.protocol === 'file:' && location.protocol === 'file:');
+      return allowed ? u.href : '';
+    } catch (err) { return ''; }
+  }
+
+  WB.define('gallery', function (root) {
+    var links = Array.prototype.filter.call(root.querySelectorAll('a[href]'), function (a) { return safeHref(a); });
+    var testDialog = document.createElement('dialog');
+    if (!links.length || typeof testDialog.showModal !== 'function') { return; }
+
+    var loop = WB.opt(root, 'loop', 'true') !== 'false';
+    var index = 0;
+    var opener = null;
+    var dialog = null, image, caption, counter, prev, next, status, startX = null;
+
+    function build() {
+      dialog = document.createElement('dialog');
+      dialog.className = 'wb-gallery__dialog';
+      var label = WB.opt(root, 'label', 'Photo viewer');
+      dialog.setAttribute('aria-label', WB.todo(label) ? 'Photo viewer' : label);
+
+      var close = button('Close', 'Close photo viewer');
+      var stage = document.createElement('figure');
+      stage.className = 'wb-gallery__stage';
+      image = document.createElement('img');
+      image.alt = '';
+      caption = document.createElement('figcaption');
+      caption.className = 'wb-gallery__caption';
+      stage.appendChild(image);
+      stage.appendChild(caption);
+
+      var bar = document.createElement('div');
+      bar.className = 'wb-gallery__bar';
+      prev = button('‹ Previous', 'Previous photo');
+      next = button('Next ›', 'Next photo');
+      counter = document.createElement('span');
+      status = document.createElement('span');
+      status.setAttribute('role', 'status');
+      status.setAttribute('aria-live', 'polite');
+      status.className = 'wb-gallery__status';
+      counter.setAttribute('aria-hidden', 'true');
+      bar.appendChild(prev);
+      bar.appendChild(counter);
+      bar.appendChild(next);
+
+      dialog.appendChild(close);
+      dialog.appendChild(stage);
+      dialog.appendChild(bar);
+      dialog.appendChild(status);
+      root.appendChild(dialog);
+
+      close.addEventListener('click', function () { dialog.close(); });
+      prev.addEventListener('click', function () { step(-1); });
+      next.addEventListener('click', function () { step(1); });
+      dialog.addEventListener('keydown', function (event) {
+        if (event.key === 'ArrowLeft') { event.preventDefault(); step(-1); }
+        else if (event.key === 'ArrowRight') { event.preventDefault(); step(1); }
+        else if (event.key === 'Home') { event.preventDefault(); show(0); }
+        else if (event.key === 'End') { event.preventDefault(); show(links.length - 1); }
+      });
+      dialog.addEventListener('pointerdown', function (event) { startX = event.pointerType === 'mouse' ? null : event.clientX; });
+      dialog.addEventListener('pointercancel', function () { startX = null; });
+      dialog.addEventListener('pointerup', function (event) {
+        if (startX === null) { return; }
+        var dx = event.clientX - startX;
+        startX = null;
+        if (Math.abs(dx) > 50) { step(dx < 0 ? 1 : -1); }
+      });
+      dialog.addEventListener('click', function (event) { if (event.target === dialog) { dialog.close(); } });
+      dialog.addEventListener('close', function () {
+        if (opener && opener.isConnected) { opener.focus(); }
+        WB.emit(root, 'gallery-close', {});
+      });
+    }
+
+    function button(text, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'wb-gallery__btn';
+      b.textContent = text;
+      b.setAttribute('aria-label', label);
+      return b;
+    }
+
+    function step(delta) {
+      var n = index + delta;
+      if (n < 0) { n = loop ? links.length - 1 : 0; }
+      if (n >= links.length) { n = loop ? 0 : links.length - 1; }
+      show(n);
+    }
+
+    function preload(i) {
+      if (i < 0 || i >= links.length) { return; }
+      var pre = new Image();
+      pre.src = safeHref(links[i]);
+    }
+
+    function show(i) {
+      index = i;
+      var link = links[i];
+      var thumb = link.querySelector('img');
+      var text = link.getAttribute('data-wb-caption') || '';
+      image.onerror = function () {
+        image.removeAttribute('src');
+        caption.textContent = 'This photo could not be loaded.';
+        status.textContent = 'This photo could not be loaded.';
+      };
+      image.alt = thumb ? thumb.alt : '';
+      image.src = safeHref(link);
+      caption.textContent = text;
+      counter.textContent = (i + 1) + ' / ' + links.length;
+      status.textContent = 'Photo ' + (i + 1) + ' of ' + links.length + (text ? ': ' + text : '');
+      var many = links.length > 1;
+      prev.hidden = next.hidden = !many;
+      if (!loop) { prev.disabled = i === 0; next.disabled = i === links.length - 1; }
+      preload(i + 1);
+      preload(i - 1);
+    }
+
+    root.addEventListener('click', function (event) {
+      var link = event.target.closest ? event.target.closest('a[href]') : null;
+      if (!link || links.indexOf(link) < 0) { return; }
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) { return; }
+      event.preventDefault();
+      if (!dialog) { build(); }
+      opener = link;
+      show(links.indexOf(link));
+      dialog.showModal();
+      WB.emit(root, 'gallery-open', { index: index });
+    });
+  });
+})();
+</script>

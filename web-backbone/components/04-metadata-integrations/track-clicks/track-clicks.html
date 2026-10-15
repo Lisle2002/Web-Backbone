@@ -1,0 +1,176 @@
+<div data-wb="track-clicks" data-wb-provider="ga4">
+
+  <!-- Examples. Only elements with data-wb-track are counted. -->
+  <a href="tel:YOUR_PHONE_NUMBER" data-wb-track="phone_click" data-wb-track-place="header">Call us</a>
+  <a href="mailto:YOUR_EMAIL_ADDRESS" data-wb-track="email_click">Email us</a>
+  <a href="sms:YOUR_PHONE_NUMBER" data-wb-track="sms_click">Text us</a>
+  <a href="https://wa.me/YOUR_PHONE_DIGITS_WITH_COUNTRY_CODE" data-wb-track="whatsapp_click">WhatsApp</a>
+
+  <!-- ...the rest of your page content goes here, inside this container... -->
+
+</div>
+
+<script>
+/* ---- wb core 1.1: identical in every component; safe to include more than once ---- */
+(function () {
+  var VERSION = '1.1';
+  var W = (window.WB = window.WB || {});
+  if (W.core) {
+    if (W.core !== VERSION) {
+      console.warn('[wb] Two versions of the wb core are on this page (' + W.core + ' and ' + VERSION + '). The first one loaded is used.');
+    }
+    return;
+  }
+  W.core = VERSION;
+  W.parts = {};
+  W.flags = {};
+  var counter = 0;
+  var starting = [];
+
+  /* Unique id for generated markup, for example "wb-faq-3". An id that is already on the page
+     (for example one your own site uses) is skipped. */
+  W.uid = function (prefix) {
+    var id;
+    do {
+      counter += 1;
+      id = 'wb-' + prefix + '-' + counter;
+    } while (document.getElementById(id));
+    return id;
+  };
+
+  /* Reads data-wb-<key> from an element. Returns fallback when missing or empty. */
+  W.opt = function (el, key, fallback) {
+    var value = el.getAttribute('data-wb-' + key);
+    value = value === null ? '' : value.trim();
+    return value === '' ? fallback : value;
+  };
+
+  /* True when a setting is empty or still contains a YOUR_... placeholder. */
+  W.todo = function (value) {
+    return !value || /YOUR_[A-Z0-9_]+/.test(value);
+  };
+
+  /* Runs fn one time per page for a given key. */
+  W.once = function (key, fn) {
+    if (!W.flags[key]) { W.flags[key] = true; fn(); }
+  };
+
+  /* Dispatches a bubbling "wb:<name>" event from el. */
+  W.emit = function (el, name, detail) {
+    el.dispatchEvent(new CustomEvent('wb:' + name, { bubbles: true, detail: detail || {} }));
+  };
+
+  W.ready = function (fn) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', fn);
+    } else {
+      fn();
+    }
+  };
+
+  /* Starts every [data-wb="<name>"] inside root (root included) that has not started yet.
+     data-wb-ready is set only after the component's start-up finished without an error.
+     If it failed, the element gets data-wb-error (holding the message) and can be started again by
+     fixing the markup and calling WB.init(container). Call WB.init(container) after you insert new
+     markup with JavaScript. */
+  W.init = function (root, only) {
+    root = root || document;
+    Object.keys(W.parts).forEach(function (name) {
+      if (only && only !== name) { return; }
+      var selector = '[data-wb="' + name + '"]';
+      var found = Array.prototype.slice.call(root.querySelectorAll(selector));
+      if (root.nodeType === 1 && root.matches(selector)) { found.unshift(root); }
+      found.forEach(function (el) {
+        if (el.hasAttribute('data-wb-ready') || starting.indexOf(el) >= 0) { return; }
+        starting.push(el);
+        try {
+          W.parts[name](el);
+          el.setAttribute('data-wb-ready', '');
+          el.removeAttribute('data-wb-error');
+        } catch (err) {
+          var message = String((err && err.message) || err);
+          if (el.getAttribute('data-wb-error') !== message) {
+            console.error('[wb ' + name + ']', err);
+          }
+          el.setAttribute('data-wb-error', message);
+        } finally {
+          starting.splice(starting.indexOf(el), 1);
+        }
+      });
+    });
+  };
+
+  /* Registers a component. The first copy of a component on the page wins. */
+  W.define = function (name, init) {
+    if (!W.parts[name]) { W.parts[name] = init; }
+    W.ready(function () { W.init(document, name); });
+  };
+})();
+(function () {
+  var NAME_PATTERN = /^[a-z][a-z0-9_]{0,39}$/;
+  var PLACE_PATTERN = /^[a-z0-9_-]{1,30}$/;
+  var PROVIDERS = { ga4: true, plausible: true, none: true };
+  var BROWSER_HOSTS = /(^|\.)(wa\.me|api\.whatsapp\.com|web\.whatsapp\.com|whatsapp\.com)$/;
+
+  /* Returns only a coarse type. Never returns the address, number or text. */
+  function methodOf(node) {
+    var href = node.tagName === 'A' ? node.getAttribute('href') : null;
+    if (href === null || href === '') { return 'button'; }
+    var url;
+    try { url = new URL(href, window.location.href); } catch (err) { return 'link'; }
+    var protocol = url.protocol.toLowerCase();
+    if (protocol === 'tel:') { return 'tel'; }
+    if (protocol === 'mailto:') { return 'mailto'; }
+    if (protocol === 'sms:') { return 'sms'; }
+    if (protocol === 'http:' || protocol === 'https:') {
+      if (BROWSER_HOSTS.test(url.hostname)) { return 'whatsapp'; }
+      return url.hostname === window.location.hostname ? 'internal' : 'outbound';
+    }
+    return 'link';
+  }
+
+  WB.define('track-clicks', function (box) {
+    var provider = WB.opt(box, 'provider', 'none');
+    if (!PROVIDERS[provider]) {
+      box.setAttribute('data-wb-state', 'invalid');
+      console.warn('[wb track-clicks] data-wb-provider must be ga4, plausible or none.');
+      return;
+    }
+    var needConsent = WB.opt(box, 'require-consent', 'false') === 'true';
+    var warned = {};
+    box.setAttribute('data-wb-state', 'ready');
+
+    box.addEventListener('click', function (event) {
+      var target = event.target;
+      var node = target && target.closest ? target.closest('[data-wb-track]') : null;
+      if (!node || !box.contains(node)) { return; }
+
+      var name = (node.getAttribute('data-wb-track') || '').trim();
+      if (!NAME_PATTERN.test(name)) {
+        if (!warned[name]) {
+          warned[name] = true;
+          console.warn('[wb track-clicks] Ignored event name "' + name + '". Use lowercase letters, digits and underscores, starting with a letter.');
+        }
+        return;
+      }
+
+      var params = { method: methodOf(node) };
+      var place = (node.getAttribute('data-wb-track-place') || '').trim();
+      if (PLACE_PATTERN.test(place)) { params.placement = place; }
+
+      var sent = false;
+      if (provider === 'ga4') {
+        sent = !!(WB.analytics && WB.analytics.event(name, params));
+      } else if (provider === 'plausible') {
+        var allowed = !needConsent || (WB.consent && WB.consent.analytics === true);
+        if (allowed && typeof window.plausible === 'function') {
+          window.plausible(name, { props: params });
+          sent = true;
+        }
+      }
+      /* "sent" means handed to the analytics tool, not confirmed as received. */
+      WB.emit(node, 'track', { name: name, params: params, provider: provider, sent: sent });
+    });
+  });
+})();
+</script>

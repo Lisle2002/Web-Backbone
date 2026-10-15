@@ -1,0 +1,190 @@
+<!-- STEP 1: in <head>, before your stylesheets. Restores a saved choice before the page paints. -->
+<script>
+(function () {
+  try {
+    var saved = localStorage.getItem('wb-theme');
+    if (saved === 'light' || saved === 'dark') { document.documentElement.setAttribute('data-wb-theme', saved); }
+  } catch (err) { /* storage blocked: the page simply follows the system setting */ }
+})();
+</script>
+
+<!-- STEP 2: style block, in <head>. -->
+<style>
+:root {
+  --wb-bg: #ffffff;
+  --wb-text: #1b1b1b;
+  --wb-muted: #555555;
+  --wb-border: #767676;
+  --wb-accent: #1a56db;
+  --wb-on-accent: #ffffff;
+  --wb-focus: #005fcc;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-wb-theme="light"]) {
+    color-scheme: dark;
+    --wb-bg: #121212; --wb-text: #ececec; --wb-muted: #b5b5b5; --wb-border: #8a8a8a;
+    --wb-accent: #8ab4f8; --wb-on-accent: #0b1b3a; --wb-focus: #8ab4f8;
+  }
+}
+:root[data-wb-theme="dark"] {
+  color-scheme: dark;
+  --wb-bg: #121212; --wb-text: #ececec; --wb-muted: #b5b5b5; --wb-border: #8a8a8a;
+  --wb-accent: #8ab4f8; --wb-on-accent: #0b1b3a; --wb-focus: #8ab4f8;
+}
+:root[data-wb-theme="light"] { color-scheme: light; }
+
+.wb-theme {
+  min-height: 2.5rem; padding: 0.35rem 0.9rem; font: inherit; cursor: pointer; color: var(--wb-text); background: var(--wb-bg);
+  border: 1px solid var(--wb-border); border-radius: var(--wb-radius, 0.375rem);
+}
+.wb-theme:focus-visible { outline: 2px solid var(--wb-focus); outline-offset: 2px; }
+.wb-theme__sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* Optional: applies the palette to the whole page. Delete if your site sets its own colors. */
+body { background: var(--wb-bg); color: var(--wb-text); }
+</style>
+
+<!-- STEP 3: the button. -->
+<button type="button" class="wb-theme" data-wb="theme-toggle" data-wb-storage-key="wb-theme">Theme: System</button>
+
+<!-- STEP 4: script block, just before </body>. -->
+<script>
+/* ---- wb core 1.1: identical in every component; safe to include more than once ---- */
+(function () {
+  var VERSION = '1.1';
+  var W = (window.WB = window.WB || {});
+  if (W.core) {
+    if (W.core !== VERSION) {
+      console.warn('[wb] Two versions of the wb core are on this page (' + W.core + ' and ' + VERSION + '). The first one loaded is used.');
+    }
+    return;
+  }
+  W.core = VERSION;
+  W.parts = {};
+  W.flags = {};
+  var counter = 0;
+  var starting = [];
+
+  /* Unique id for generated markup, for example "wb-faq-3". An id that is already on the page
+     (for example one your own site uses) is skipped. */
+  W.uid = function (prefix) {
+    var id;
+    do {
+      counter += 1;
+      id = 'wb-' + prefix + '-' + counter;
+    } while (document.getElementById(id));
+    return id;
+  };
+
+  /* Reads data-wb-<key> from an element. Returns fallback when missing or empty. */
+  W.opt = function (el, key, fallback) {
+    var value = el.getAttribute('data-wb-' + key);
+    value = value === null ? '' : value.trim();
+    return value === '' ? fallback : value;
+  };
+
+  /* True when a setting is empty or still contains a YOUR_... placeholder. */
+  W.todo = function (value) {
+    return !value || /YOUR_[A-Z0-9_]+/.test(value);
+  };
+
+  /* Runs fn one time per page for a given key. */
+  W.once = function (key, fn) {
+    if (!W.flags[key]) { W.flags[key] = true; fn(); }
+  };
+
+  /* Dispatches a bubbling "wb:<name>" event from el. */
+  W.emit = function (el, name, detail) {
+    el.dispatchEvent(new CustomEvent('wb:' + name, { bubbles: true, detail: detail || {} }));
+  };
+
+  W.ready = function (fn) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', fn);
+    } else {
+      fn();
+    }
+  };
+
+  /* Starts every [data-wb="<name>"] inside root (root included) that has not started yet.
+     data-wb-ready is set only after the component's start-up finished without an error.
+     If it failed, the element gets data-wb-error (holding the message) and can be started again by
+     fixing the markup and calling WB.init(container). Call WB.init(container) after you insert new
+     markup with JavaScript. */
+  W.init = function (root, only) {
+    root = root || document;
+    Object.keys(W.parts).forEach(function (name) {
+      if (only && only !== name) { return; }
+      var selector = '[data-wb="' + name + '"]';
+      var found = Array.prototype.slice.call(root.querySelectorAll(selector));
+      if (root.nodeType === 1 && root.matches(selector)) { found.unshift(root); }
+      found.forEach(function (el) {
+        if (el.hasAttribute('data-wb-ready') || starting.indexOf(el) >= 0) { return; }
+        starting.push(el);
+        try {
+          W.parts[name](el);
+          el.setAttribute('data-wb-ready', '');
+          el.removeAttribute('data-wb-error');
+        } catch (err) {
+          var message = String((err && err.message) || err);
+          if (el.getAttribute('data-wb-error') !== message) {
+            console.error('[wb ' + name + ']', err);
+          }
+          el.setAttribute('data-wb-error', message);
+        } finally {
+          starting.splice(starting.indexOf(el), 1);
+        }
+      });
+    });
+  };
+
+  /* Registers a component. The first copy of a component on the page wins. */
+  W.define = function (name, init) {
+    if (!W.parts[name]) { W.parts[name] = init; }
+    W.ready(function () { W.init(document, name); });
+  };
+})();
+(function () {
+  var LABELS = { system: 'Theme: System', light: 'Theme: Light', dark: 'Theme: Dark' };
+  var ORDER = ['system', 'light', 'dark'];
+  var root = document.documentElement;
+
+  function current() {
+    var value = root.getAttribute('data-wb-theme');
+    return value === 'light' || value === 'dark' ? value : 'system';
+  }
+
+  WB.define('theme-toggle', function (button) {
+    var key = WB.opt(button, 'storage-key', 'wb-theme');
+    var note = document.createElement('span');
+    note.className = 'wb-theme__sr';
+    note.setAttribute('role', 'status');
+    button.insertAdjacentElement('afterend', note);
+
+    function render(announce) {
+      var mode = current();
+      button.textContent = LABELS[mode];
+      button.setAttribute('aria-label', LABELS[mode] + '. Press to change.');
+      if (announce) { note.textContent = LABELS[mode]; }
+    }
+
+    function onChange() {
+      if (!button.isConnected) { document.removeEventListener('wb:theme-change', onChange); return; }
+      render(false);
+    }
+    document.addEventListener('wb:theme-change', onChange);
+
+    button.addEventListener('click', function () {
+      var next = ORDER[(ORDER.indexOf(current()) + 1) % ORDER.length];
+      if (next === 'system') { root.removeAttribute('data-wb-theme'); } else { root.setAttribute('data-wb-theme', next); }
+      try {
+        if (next === 'system') { localStorage.removeItem(key); } else { localStorage.setItem(key, next); }
+      } catch (err) { /* storage blocked: the choice lasts until the page is reloaded */ }
+      render(true);
+      document.dispatchEvent(new CustomEvent('wb:theme-change', { detail: { theme: next } }));
+    });
+
+    render(false);
+  });
+})();
+</script>

@@ -1,0 +1,181 @@
+<style>
+.wb-share { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.wb-share__button {
+  min-height: 2.5rem; padding: 0.35rem 0.9rem; font: inherit; cursor: pointer; color: var(--wb-accent, #1a56db); background: var(--wb-bg, transparent);
+  border: 1px solid var(--wb-accent, #1a56db); border-radius: var(--wb-radius, 0.375rem);
+}
+.wb-share__button:focus-visible { outline: 2px solid var(--wb-focus, #005fcc); outline-offset: 2px; }
+.wb-share__status { overflow-wrap: anywhere; }
+</style>
+
+<span class="wb-share" data-wb="share-button" data-wb-url="" data-wb-title="" data-wb-text="">
+  <button type="button" class="wb-share__button" data-wb-button>Share this page</button>
+  <span class="wb-share__status" role="status" aria-live="polite" data-wb-status></span>
+</span>
+
+<script>
+/* ---- wb core 1.1: identical in every component; safe to include more than once ---- */
+(function () {
+  var VERSION = '1.1';
+  var W = (window.WB = window.WB || {});
+  if (W.core) {
+    if (W.core !== VERSION) {
+      console.warn('[wb] Two versions of the wb core are on this page (' + W.core + ' and ' + VERSION + '). The first one loaded is used.');
+    }
+    return;
+  }
+  W.core = VERSION;
+  W.parts = {};
+  W.flags = {};
+  var counter = 0;
+  var starting = [];
+
+  /* Unique id for generated markup, for example "wb-faq-3". An id that is already on the page
+     (for example one your own site uses) is skipped. */
+  W.uid = function (prefix) {
+    var id;
+    do {
+      counter += 1;
+      id = 'wb-' + prefix + '-' + counter;
+    } while (document.getElementById(id));
+    return id;
+  };
+
+  /* Reads data-wb-<key> from an element. Returns fallback when missing or empty. */
+  W.opt = function (el, key, fallback) {
+    var value = el.getAttribute('data-wb-' + key);
+    value = value === null ? '' : value.trim();
+    return value === '' ? fallback : value;
+  };
+
+  /* True when a setting is empty or still contains a YOUR_... placeholder. */
+  W.todo = function (value) {
+    return !value || /YOUR_[A-Z0-9_]+/.test(value);
+  };
+
+  /* Runs fn one time per page for a given key. */
+  W.once = function (key, fn) {
+    if (!W.flags[key]) { W.flags[key] = true; fn(); }
+  };
+
+  /* Dispatches a bubbling "wb:<name>" event from el. */
+  W.emit = function (el, name, detail) {
+    el.dispatchEvent(new CustomEvent('wb:' + name, { bubbles: true, detail: detail || {} }));
+  };
+
+  W.ready = function (fn) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', fn);
+    } else {
+      fn();
+    }
+  };
+
+  /* Starts every [data-wb="<name>"] inside root (root included) that has not started yet.
+     data-wb-ready is set only after the component's start-up finished without an error.
+     If it failed, the element gets data-wb-error (holding the message) and can be started again by
+     fixing the markup and calling WB.init(container). Call WB.init(container) after you insert new
+     markup with JavaScript. */
+  W.init = function (root, only) {
+    root = root || document;
+    Object.keys(W.parts).forEach(function (name) {
+      if (only && only !== name) { return; }
+      var selector = '[data-wb="' + name + '"]';
+      var found = Array.prototype.slice.call(root.querySelectorAll(selector));
+      if (root.nodeType === 1 && root.matches(selector)) { found.unshift(root); }
+      found.forEach(function (el) {
+        if (el.hasAttribute('data-wb-ready') || starting.indexOf(el) >= 0) { return; }
+        starting.push(el);
+        try {
+          W.parts[name](el);
+          el.setAttribute('data-wb-ready', '');
+          el.removeAttribute('data-wb-error');
+        } catch (err) {
+          var message = String((err && err.message) || err);
+          if (el.getAttribute('data-wb-error') !== message) {
+            console.error('[wb ' + name + ']', err);
+          }
+          el.setAttribute('data-wb-error', message);
+        } finally {
+          starting.splice(starting.indexOf(el), 1);
+        }
+      });
+    });
+  };
+
+  /* Registers a component. The first copy of a component on the page wins. */
+  W.define = function (name, init) {
+    if (!W.parts[name]) { W.parts[name] = init; }
+    W.ready(function () { W.init(document, name); });
+  };
+})();
+(function () {
+  function legacyCopy(text) {
+    var box = document.createElement('textarea');
+    box.value = text;
+    box.setAttribute('readonly', '');
+    box.style.position = 'fixed';
+    box.style.top = '0';
+    box.style.opacity = '0';
+    document.body.appendChild(box);
+    box.select();
+    var ok = false;
+    try { ok = document.execCommand('copy'); } catch (err) { ok = false; }
+    document.body.removeChild(box);
+    return ok;
+  }
+  function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      return navigator.clipboard.writeText(text).then(function () { return true; }, function () { return legacyCopy(text); });
+    }
+    return Promise.resolve(legacyCopy(text));
+  }
+
+  function pageUrl(el) {
+    var chosen = WB.opt(el, 'url', '');
+    if (chosen) { return new URL(chosen, location.href).href; }
+    var canonical = document.querySelector('link[rel="canonical"]');
+    return canonical && canonical.href ? canonical.href : location.href;
+  }
+
+  WB.define('share-button', function (el) {
+    var button = el.querySelector('[data-wb-button]');
+    var status = el.querySelector('[data-wb-status]');
+    if (!button) { throw new Error('share-button needs a [data-wb-button] element'); }
+    var timer = null;
+
+    function say(text) {
+      if (!status) { return; }
+      status.textContent = text;
+      clearTimeout(timer);
+      if (text) { timer = setTimeout(function () { if (el.isConnected) { status.textContent = ''; } }, 6000); }
+    }
+
+    button.addEventListener('click', function () {
+      var url;
+      try { url = pageUrl(el); } catch (err) { say('The link to share is not valid.'); return; }
+      var data = { title: WB.opt(el, 'title', document.title), url: url };
+      var text = WB.opt(el, 'text', '');
+      if (text) { data.text = text; }
+
+      if (typeof navigator.share === 'function') {
+        navigator.share(data).then(function () {
+          WB.emit(el, 'shared', { method: 'share-sheet' });
+        }, function (err) {
+          if (err && err.name === 'AbortError') { return; }   /* the visitor closed the share sheet */
+          say('Sharing failed. Copy this link instead: ' + url);
+        });
+        return;
+      }
+      copyText(url).then(function (ok) {
+        if (ok) {
+          say(WB.opt(el, 'copied', 'Link copied'));
+          WB.emit(el, 'shared', { method: 'copy' });
+        } else {
+          say(WB.opt(el, 'failed', 'Copy this link:') + ' ' + url);
+        }
+      });
+    });
+  });
+})();
+</script>

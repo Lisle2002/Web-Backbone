@@ -1,0 +1,161 @@
+<style>
+html { scroll-padding-top: var(--wb-anchor-offset, 0px); }
+@media (prefers-reduced-motion: no-preference) {
+  html { scroll-behavior: smooth; }
+}
+</style>
+
+<div data-wb="anchor-scroll" data-wb-header="header" data-wb-gap="8" hidden></div>
+
+<script>
+/* ---- wb core 1.1: identical in every component; safe to include more than once ---- */
+(function () {
+  var VERSION = '1.1';
+  var W = (window.WB = window.WB || {});
+  if (W.core) {
+    if (W.core !== VERSION) {
+      console.warn('[wb] Two versions of the wb core are on this page (' + W.core + ' and ' + VERSION + '). The first one loaded is used.');
+    }
+    return;
+  }
+  W.core = VERSION;
+  W.parts = {};
+  W.flags = {};
+  var counter = 0;
+  var starting = [];
+
+  /* Unique id for generated markup, for example "wb-faq-3". An id that is already on the page
+     (for example one your own site uses) is skipped. */
+  W.uid = function (prefix) {
+    var id;
+    do {
+      counter += 1;
+      id = 'wb-' + prefix + '-' + counter;
+    } while (document.getElementById(id));
+    return id;
+  };
+
+  /* Reads data-wb-<key> from an element. Returns fallback when missing or empty. */
+  W.opt = function (el, key, fallback) {
+    var value = el.getAttribute('data-wb-' + key);
+    value = value === null ? '' : value.trim();
+    return value === '' ? fallback : value;
+  };
+
+  /* True when a setting is empty or still contains a YOUR_... placeholder. */
+  W.todo = function (value) {
+    return !value || /YOUR_[A-Z0-9_]+/.test(value);
+  };
+
+  /* Runs fn one time per page for a given key. */
+  W.once = function (key, fn) {
+    if (!W.flags[key]) { W.flags[key] = true; fn(); }
+  };
+
+  /* Dispatches a bubbling "wb:<name>" event from el. */
+  W.emit = function (el, name, detail) {
+    el.dispatchEvent(new CustomEvent('wb:' + name, { bubbles: true, detail: detail || {} }));
+  };
+
+  W.ready = function (fn) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', fn);
+    } else {
+      fn();
+    }
+  };
+
+  /* Starts every [data-wb="<name>"] inside root (root included) that has not started yet.
+     data-wb-ready is set only after the component's start-up finished without an error.
+     If it failed, the element gets data-wb-error (holding the message) and can be started again by
+     fixing the markup and calling WB.init(container). Call WB.init(container) after you insert new
+     markup with JavaScript. */
+  W.init = function (root, only) {
+    root = root || document;
+    Object.keys(W.parts).forEach(function (name) {
+      if (only && only !== name) { return; }
+      var selector = '[data-wb="' + name + '"]';
+      var found = Array.prototype.slice.call(root.querySelectorAll(selector));
+      if (root.nodeType === 1 && root.matches(selector)) { found.unshift(root); }
+      found.forEach(function (el) {
+        if (el.hasAttribute('data-wb-ready') || starting.indexOf(el) >= 0) { return; }
+        starting.push(el);
+        try {
+          W.parts[name](el);
+          el.setAttribute('data-wb-ready', '');
+          el.removeAttribute('data-wb-error');
+        } catch (err) {
+          var message = String((err && err.message) || err);
+          if (el.getAttribute('data-wb-error') !== message) {
+            console.error('[wb ' + name + ']', err);
+          }
+          el.setAttribute('data-wb-error', message);
+        } finally {
+          starting.splice(starting.indexOf(el), 1);
+        }
+      });
+    });
+  };
+
+  /* Registers a component. The first copy of a component on the page wins. */
+  W.define = function (name, init) {
+    if (!W.parts[name]) { W.parts[name] = init; }
+    W.ready(function () { W.init(document, name); });
+  };
+})();
+(function () {
+  WB.define('anchor-scroll', function (marker) {
+    WB.once('anchor-scroll', function () {
+      var selector = WB.opt(marker, 'header', 'header');
+      var gap = parseInt(WB.opt(marker, 'gap', '8'), 10);
+      if (!(gap >= 0)) { gap = 8; }
+      var root = document.documentElement;
+      var header = null;
+      try { header = document.querySelector(selector); } catch (err) { console.warn('[wb anchor-scroll] Invalid data-wb-header selector: ' + selector); }
+
+      function measure() {
+        var offset = 0;
+        if (header) {
+          var position = window.getComputedStyle(header).position;
+          if (position === 'fixed' || position === 'sticky') {
+            offset = Math.ceil(header.getBoundingClientRect().height) + gap;
+          }
+        }
+        root.style.setProperty('--wb-anchor-offset', offset + 'px');
+      }
+
+      function targetFromHash() {
+        var id = '';
+        try { id = decodeURIComponent(location.hash.slice(1)); } catch (err) { return null; }
+        return id ? document.getElementById(id) : null;
+      }
+
+      function focusTarget(target) {
+        if (!target.hasAttribute('tabindex') && !/^(A|BUTTON|INPUT|SELECT|TEXTAREA|SUMMARY)$/.test(target.tagName)) {
+          target.setAttribute('tabindex', '-1');
+          target.addEventListener('blur', function () { target.removeAttribute('tabindex'); }, { once: true });
+        }
+        target.focus({ preventScroll: true });
+      }
+
+      measure();
+      window.addEventListener('resize', measure);
+      if (header && window.ResizeObserver) { new ResizeObserver(measure).observe(header); }
+
+      window.addEventListener('hashchange', function () {
+        var target = targetFromHash();
+        if (target) { focusTarget(target); }
+      });
+
+      /* A link opened with #section in the address: the browser scrolled before the offset existed, so scroll again. */
+      var first = targetFromHash();
+      if (first) {
+        window.requestAnimationFrame(function () {
+          first.scrollIntoView();
+          focusTarget(first);
+        });
+      }
+    });
+  });
+})();
+</script>

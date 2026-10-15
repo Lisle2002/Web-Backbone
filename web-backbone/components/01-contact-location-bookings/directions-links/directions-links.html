@@ -1,0 +1,175 @@
+<style>
+.wb-directions__links { list-style: none; margin: 0.5rem 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; }
+.wb-directions__links a { display: inline-block; padding: 0.35rem 0; min-height: 1.5rem; color: var(--wb-accent, inherit); }
+.wb-directions a:focus-visible { outline: 2px solid var(--wb-focus, #005fcc); outline-offset: 2px; }
+.wb-directions__sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+</style>
+
+<div class="wb-directions" data-wb="directions-links"
+     data-wb-providers="google,apple"
+     data-wb-travelmode="driving">
+  <address class="wb-directions__address" data-wb-address>YOUR_STREET_ADDRESS, YOUR_CITY</address>
+  <ul class="wb-directions__links" data-wb-links></ul>
+</div>
+
+<script>
+/* ---- wb core 1.1: identical in every component; safe to include more than once ---- */
+(function () {
+  var VERSION = '1.1';
+  var W = (window.WB = window.WB || {});
+  if (W.core) {
+    if (W.core !== VERSION) {
+      console.warn('[wb] Two versions of the wb core are on this page (' + W.core + ' and ' + VERSION + '). The first one loaded is used.');
+    }
+    return;
+  }
+  W.core = VERSION;
+  W.parts = {};
+  W.flags = {};
+  var counter = 0;
+  var starting = [];
+
+  /* Unique id for generated markup, for example "wb-faq-3". An id that is already on the page
+     (for example one your own site uses) is skipped. */
+  W.uid = function (prefix) {
+    var id;
+    do {
+      counter += 1;
+      id = 'wb-' + prefix + '-' + counter;
+    } while (document.getElementById(id));
+    return id;
+  };
+
+  /* Reads data-wb-<key> from an element. Returns fallback when missing or empty. */
+  W.opt = function (el, key, fallback) {
+    var value = el.getAttribute('data-wb-' + key);
+    value = value === null ? '' : value.trim();
+    return value === '' ? fallback : value;
+  };
+
+  /* True when a setting is empty or still contains a YOUR_... placeholder. */
+  W.todo = function (value) {
+    return !value || /YOUR_[A-Z0-9_]+/.test(value);
+  };
+
+  /* Runs fn one time per page for a given key. */
+  W.once = function (key, fn) {
+    if (!W.flags[key]) { W.flags[key] = true; fn(); }
+  };
+
+  /* Dispatches a bubbling "wb:<name>" event from el. */
+  W.emit = function (el, name, detail) {
+    el.dispatchEvent(new CustomEvent('wb:' + name, { bubbles: true, detail: detail || {} }));
+  };
+
+  W.ready = function (fn) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', fn);
+    } else {
+      fn();
+    }
+  };
+
+  /* Starts every [data-wb="<name>"] inside root (root included) that has not started yet.
+     data-wb-ready is set only after the component's start-up finished without an error.
+     If it failed, the element gets data-wb-error (holding the message) and can be started again by
+     fixing the markup and calling WB.init(container). Call WB.init(container) after you insert new
+     markup with JavaScript. */
+  W.init = function (root, only) {
+    root = root || document;
+    Object.keys(W.parts).forEach(function (name) {
+      if (only && only !== name) { return; }
+      var selector = '[data-wb="' + name + '"]';
+      var found = Array.prototype.slice.call(root.querySelectorAll(selector));
+      if (root.nodeType === 1 && root.matches(selector)) { found.unshift(root); }
+      found.forEach(function (el) {
+        if (el.hasAttribute('data-wb-ready') || starting.indexOf(el) >= 0) { return; }
+        starting.push(el);
+        try {
+          W.parts[name](el);
+          el.setAttribute('data-wb-ready', '');
+          el.removeAttribute('data-wb-error');
+        } catch (err) {
+          var message = String((err && err.message) || err);
+          if (el.getAttribute('data-wb-error') !== message) {
+            console.error('[wb ' + name + ']', err);
+          }
+          el.setAttribute('data-wb-error', message);
+        } finally {
+          starting.splice(starting.indexOf(el), 1);
+        }
+      });
+    });
+  };
+
+  /* Registers a component. The first copy of a component on the page wins. */
+  W.define = function (name, init) {
+    if (!W.parts[name]) { W.parts[name] = init; }
+    W.ready(function () { W.init(document, name); });
+  };
+})();
+(function () {
+  var LATLNG = /^-?\d{1,3}(\.\d+)?,\s*-?\d{1,3}(\.\d+)?$/;
+
+  var providers = {
+    google: {
+      label: 'Directions in Google Maps',
+      url: function (destination, mode) {
+        var ok = { driving: 1, walking: 1, bicycling: 1, transit: 1 };
+        return 'https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(destination) +
+          (ok[mode] ? '&travelmode=' + mode : '');
+      }
+    },
+    apple: {
+      label: 'Directions in Apple Maps',
+      url: function (destination, mode) {
+        var flags = { driving: 'd', walking: 'w', transit: 'r' };
+        return 'https://maps.apple.com/?daddr=' + encodeURIComponent(destination) +
+          (flags[mode] ? '&dirflg=' + flags[mode] : '');
+      }
+    }
+  };
+
+  WB.define('directions-links', function (el) {
+    var list = el.querySelector('[data-wb-links]');
+    var addressEl = el.querySelector('[data-wb-address]');
+    var latlng = WB.opt(el, 'latlng', '');
+    var text = addressEl ? addressEl.textContent.replace(/\s+/g, ' ').trim() : '';
+    var destination = latlng || text;
+
+    if (!list || WB.todo(destination)) {
+      el.setAttribute('data-wb-state', 'unconfigured');
+      console.warn('[wb directions-links] Put your address in the data-wb-address element.');
+      return;
+    }
+    if (latlng && !LATLNG.test(latlng)) {
+      el.setAttribute('data-wb-state', 'invalid');
+      console.warn('[wb directions-links] data-wb-latlng must look like 12.3456,-65.4321');
+      return;
+    }
+
+    var mode = WB.opt(el, 'travelmode', 'driving');
+    var names = WB.opt(el, 'providers', 'google,apple').split(',');
+    names.forEach(function (raw) {
+      var name = raw.trim().toLowerCase();
+      var provider = providers[name];
+      if (!provider) { console.warn('[wb directions-links] Unknown provider: ' + name); return; }
+
+      var link = document.createElement('a');
+      link.href = provider.url(destination, mode);
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.appendChild(document.createTextNode(WB.opt(el, 'label-' + name, provider.label)));
+      var hint = document.createElement('span');
+      hint.className = 'wb-directions__sr';
+      hint.textContent = ' (opens in a new tab)';
+      link.appendChild(hint);
+
+      var item = document.createElement('li');
+      item.appendChild(link);
+      list.appendChild(item);
+    });
+    el.setAttribute('data-wb-state', 'ready');
+  });
+})();
+</script>

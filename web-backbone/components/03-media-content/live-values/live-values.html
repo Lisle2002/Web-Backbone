@@ -1,0 +1,193 @@
+<div data-wb="live-values" data-wb-src="data/YOUR_VALUES.csv" data-wb-refresh="">
+  <p>Today's special: <strong data-wb-key="special">Soup of the day</strong> for <span data-wb-key="price">$8</span>.</p>
+  <p data-wb-status></p>
+</div>
+
+<!-- Example data/YOUR_VALUES.csv:
+key,value
+special,Mushroom soup
+price,$9
+-->
+
+<script>
+/* ---- wb core 1.1: identical in every component; safe to include more than once ---- */
+(function () {
+  var VERSION = '1.1';
+  var W = (window.WB = window.WB || {});
+  if (W.core) {
+    if (W.core !== VERSION) {
+      console.warn('[wb] Two versions of the wb core are on this page (' + W.core + ' and ' + VERSION + '). The first one loaded is used.');
+    }
+    return;
+  }
+  W.core = VERSION;
+  W.parts = {};
+  W.flags = {};
+  var counter = 0;
+  var starting = [];
+
+  /* Unique id for generated markup, for example "wb-faq-3". An id that is already on the page
+     (for example one your own site uses) is skipped. */
+  W.uid = function (prefix) {
+    var id;
+    do {
+      counter += 1;
+      id = 'wb-' + prefix + '-' + counter;
+    } while (document.getElementById(id));
+    return id;
+  };
+
+  /* Reads data-wb-<key> from an element. Returns fallback when missing or empty. */
+  W.opt = function (el, key, fallback) {
+    var value = el.getAttribute('data-wb-' + key);
+    value = value === null ? '' : value.trim();
+    return value === '' ? fallback : value;
+  };
+
+  /* True when a setting is empty or still contains a YOUR_... placeholder. */
+  W.todo = function (value) {
+    return !value || /YOUR_[A-Z0-9_]+/.test(value);
+  };
+
+  /* Runs fn one time per page for a given key. */
+  W.once = function (key, fn) {
+    if (!W.flags[key]) { W.flags[key] = true; fn(); }
+  };
+
+  /* Dispatches a bubbling "wb:<name>" event from el. */
+  W.emit = function (el, name, detail) {
+    el.dispatchEvent(new CustomEvent('wb:' + name, { bubbles: true, detail: detail || {} }));
+  };
+
+  W.ready = function (fn) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', fn);
+    } else {
+      fn();
+    }
+  };
+
+  /* Starts every [data-wb="<name>"] inside root (root included) that has not started yet.
+     data-wb-ready is set only after the component's start-up finished without an error.
+     If it failed, the element gets data-wb-error (holding the message) and can be started again by
+     fixing the markup and calling WB.init(container). Call WB.init(container) after you insert new
+     markup with JavaScript. */
+  W.init = function (root, only) {
+    root = root || document;
+    Object.keys(W.parts).forEach(function (name) {
+      if (only && only !== name) { return; }
+      var selector = '[data-wb="' + name + '"]';
+      var found = Array.prototype.slice.call(root.querySelectorAll(selector));
+      if (root.nodeType === 1 && root.matches(selector)) { found.unshift(root); }
+      found.forEach(function (el) {
+        if (el.hasAttribute('data-wb-ready') || starting.indexOf(el) >= 0) { return; }
+        starting.push(el);
+        try {
+          W.parts[name](el);
+          el.setAttribute('data-wb-ready', '');
+          el.removeAttribute('data-wb-error');
+        } catch (err) {
+          var message = String((err && err.message) || err);
+          if (el.getAttribute('data-wb-error') !== message) {
+            console.error('[wb ' + name + ']', err);
+          }
+          el.setAttribute('data-wb-error', message);
+        } finally {
+          starting.splice(starting.indexOf(el), 1);
+        }
+      });
+    });
+  };
+
+  /* Registers a component. The first copy of a component on the page wins. */
+  W.define = function (name, init) {
+    if (!W.parts[name]) { W.parts[name] = init; }
+    W.ready(function () { W.init(document, name); });
+  };
+})();
+(function () {
+  function parseCsv(text) {
+    if (text.charCodeAt(0) === 0xFEFF) { text = text.slice(1); }
+    var rows = [], row = [], field = '', quoted = false;
+    for (var i = 0; i < text.length; i++) {
+      var c = text.charAt(i);
+      if (quoted) {
+        if (c === '"') {
+          if (text.charAt(i + 1) === '"') { field += '"'; i++; } else { quoted = false; }
+        } else { field += c; }
+      } else if (c === '"' && field === '') {
+        quoted = true;
+      } else if (c === ',') {
+        row.push(field); field = '';
+      } else if (c === '\n' || c === '\r') {
+        if (c === '\r' && text.charAt(i + 1) === '\n') { i++; }
+        row.push(field); rows.push(row); row = []; field = '';
+      } else { field += c; }
+    }
+    if (quoted) { throw new Error('The CSV file has a quote that is never closed.'); }
+    if (field !== '' || row.length) { row.push(field); rows.push(row); }
+    return rows.filter(function (r) { return !(r.length === 1 && r[0] === ''); });
+  }
+
+  /* CSV (key,value) or JSON object -> plain object of strings */
+  function toValues(text, src, contentType) {
+    var asJson = /\.json(\?|#|$)/i.test(src) || /json/i.test(contentType || '') || /^\s*\{/.test(text);
+    var values = {};
+    if (asJson) {
+      var data = JSON.parse(text);
+      if (!data || typeof data !== 'object' || Array.isArray(data)) { throw new Error('The JSON file must be an object of key: value pairs.'); }
+      Object.keys(data).forEach(function (k) { if (data[k] !== null && typeof data[k] !== 'object') { values[k] = String(data[k]); } });
+    } else {
+      var rows = parseCsv(text);
+      if (rows.length && /^key$/i.test(rows[0][0].trim()) && /^value$/i.test((rows[0][1] || '').trim())) { rows.shift(); }
+      rows.forEach(function (r) { if (r.length >= 2 && r[0].trim()) { values[r[0].trim()] = r[1]; } });
+    }
+    return values;
+  }
+
+  WB.define('live-values', function (el) {
+    var src = WB.opt(el, 'src', '');
+    var status = el.querySelector('[data-wb-status]');
+    if (WB.todo(src)) {
+      el.setAttribute('data-wb-state', 'unconfigured');
+      console.warn('[wb live-values] Set data-wb-src to your CSV or JSON file.');
+      return;
+    }
+    var seconds = parseInt(WB.opt(el, 'refresh', ''), 10);
+    var token = 0;
+    var timer = null;
+
+    function load() {
+      if (!el.isConnected) { return; }
+      var mine = ++token;
+      el.setAttribute('data-wb-state', 'loading');
+      var controller = new AbortController();
+      var stop = setTimeout(function () { controller.abort(); }, 12000);
+      fetch(src, { credentials: 'omit', cache: 'no-cache', signal: controller.signal }).then(function (response) {
+        if (!response.ok) { throw new Error('The server answered ' + response.status + '.'); }
+        return response.text().then(function (text) { return toValues(text, src, response.headers.get('content-type')); });
+      }).then(function (values) {
+        if (mine !== token) { return; }
+        Array.prototype.forEach.call(el.querySelectorAll('[data-wb-key]'), function (target) {
+          var key = target.getAttribute('data-wb-key');
+          if (Object.prototype.hasOwnProperty.call(values, key)) { target.textContent = values[key]; }
+        });
+        if (status) { status.textContent = ''; }
+        el.setAttribute('data-wb-state', 'ready');
+        WB.emit(el, 'values-loaded', {});
+      }).catch(function (err) {
+        if (mine !== token) { return; }
+        el.setAttribute('data-wb-state', 'error');
+        if (status) { status.textContent = WB.opt(el, 'status-text', 'Live values are unavailable right now, so saved values are shown.'); }
+        console.warn('[wb live-values]', err && err.message ? err.message : err);
+      }).then(function () {
+        clearTimeout(stop);
+        if (seconds >= 30 && el.isConnected) {
+          timer = setTimeout(load, seconds * 1000);
+        }
+      });
+    }
+    load();
+  });
+})();
+</script>

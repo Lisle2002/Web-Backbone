@@ -1,0 +1,14 @@
+# Save this as robots.txt in the top folder of your site.
+# It is a request to well-behaved crawlers, not a security feature.
+
+User-agent: *
+Allow: /
+# Folders crawlers should not fetch (delete the next line if you have none):
+Disallow: /YOUR_PRIVATE_FOLDER/
+
+# Example: keep one named crawler out entirely (remove the # marks to use it).
+# User-agent: YOUR_CRAWLER_NAME
+# Disallow: /
+
+# Full web address of your sitemap (delete this line if you have none).
+Sitemap: https://YOUR_DOMAIN/sitemap.xml

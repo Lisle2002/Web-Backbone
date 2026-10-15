@@ -1,0 +1,178 @@
+<style>
+.wb-faq { border-top: 1px solid var(--wb-border, #c4c4c4); }
+.wb-faq__item { border-bottom: 1px solid var(--wb-border, #c4c4c4); }
+.wb-faq__item > summary {
+  position: relative; display: block; box-sizing: border-box; min-height: 2.75rem; padding: 0.75rem 2.5rem 0.75rem 0;
+  font-weight: 600; cursor: pointer; list-style: none;
+}
+.wb-faq__item > summary::-webkit-details-marker { display: none; }
+.wb-faq__item > summary::after { content: "+"; content: "+" / ""; position: absolute; right: 0.5rem; top: 0.6rem; font-size: 1.25em; color: var(--wb-accent, inherit); }
+.wb-faq__item[open] > summary::after { content: "\2212"; content: "\2212" / ""; }
+.wb-faq__item > summary:focus-visible { outline: 2px solid var(--wb-focus, #005fcc); outline-offset: 2px; }
+.wb-faq__answer { padding: 0 0 1rem; }
+.wb-faq__answer > :first-child { margin-top: 0; }
+.wb-faq__answer > :last-child { margin-bottom: 0; }
+</style>
+
+<div class="wb-faq" data-wb="faq" data-wb-exclusive="false">
+  <!-- To link straight to an item, give its <details> a unique id (for example id="shipping") and link to #shipping. -->
+  <details class="wb-faq__item">
+    <summary>YOUR_QUESTION_ONE</summary>
+    <div class="wb-faq__answer"><p>YOUR_ANSWER_ONE</p></div>
+  </details>
+  <details class="wb-faq__item">
+    <summary>YOUR_QUESTION_TWO</summary>
+    <div class="wb-faq__answer"><p>YOUR_ANSWER_TWO</p></div>
+  </details>
+  <details class="wb-faq__item">
+    <summary>YOUR_QUESTION_THREE</summary>
+    <div class="wb-faq__answer"><p>YOUR_ANSWER_THREE</p></div>
+  </details>
+</div>
+
+<script>
+/* ---- wb core 1.1: identical in every component; safe to include more than once ---- */
+(function () {
+  var VERSION = '1.1';
+  var W = (window.WB = window.WB || {});
+  if (W.core) {
+    if (W.core !== VERSION) {
+      console.warn('[wb] Two versions of the wb core are on this page (' + W.core + ' and ' + VERSION + '). The first one loaded is used.');
+    }
+    return;
+  }
+  W.core = VERSION;
+  W.parts = {};
+  W.flags = {};
+  var counter = 0;
+  var starting = [];
+
+  /* Unique id for generated markup, for example "wb-faq-3". An id that is already on the page
+     (for example one your own site uses) is skipped. */
+  W.uid = function (prefix) {
+    var id;
+    do {
+      counter += 1;
+      id = 'wb-' + prefix + '-' + counter;
+    } while (document.getElementById(id));
+    return id;
+  };
+
+  /* Reads data-wb-<key> from an element. Returns fallback when missing or empty. */
+  W.opt = function (el, key, fallback) {
+    var value = el.getAttribute('data-wb-' + key);
+    value = value === null ? '' : value.trim();
+    return value === '' ? fallback : value;
+  };
+
+  /* True when a setting is empty or still contains a YOUR_... placeholder. */
+  W.todo = function (value) {
+    return !value || /YOUR_[A-Z0-9_]+/.test(value);
+  };
+
+  /* Runs fn one time per page for a given key. */
+  W.once = function (key, fn) {
+    if (!W.flags[key]) { W.flags[key] = true; fn(); }
+  };
+
+  /* Dispatches a bubbling "wb:<name>" event from el. */
+  W.emit = function (el, name, detail) {
+    el.dispatchEvent(new CustomEvent('wb:' + name, { bubbles: true, detail: detail || {} }));
+  };
+
+  W.ready = function (fn) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', fn);
+    } else {
+      fn();
+    }
+  };
+
+  /* Starts every [data-wb="<name>"] inside root (root included) that has not started yet.
+     data-wb-ready is set only after the component's start-up finished without an error.
+     If it failed, the element gets data-wb-error (holding the message) and can be started again by
+     fixing the markup and calling WB.init(container). Call WB.init(container) after you insert new
+     markup with JavaScript. */
+  W.init = function (root, only) {
+    root = root || document;
+    Object.keys(W.parts).forEach(function (name) {
+      if (only && only !== name) { return; }
+      var selector = '[data-wb="' + name + '"]';
+      var found = Array.prototype.slice.call(root.querySelectorAll(selector));
+      if (root.nodeType === 1 && root.matches(selector)) { found.unshift(root); }
+      found.forEach(function (el) {
+        if (el.hasAttribute('data-wb-ready') || starting.indexOf(el) >= 0) { return; }
+        starting.push(el);
+        try {
+          W.parts[name](el);
+          el.setAttribute('data-wb-ready', '');
+          el.removeAttribute('data-wb-error');
+        } catch (err) {
+          var message = String((err && err.message) || err);
+          if (el.getAttribute('data-wb-error') !== message) {
+            console.error('[wb ' + name + ']', err);
+          }
+          el.setAttribute('data-wb-error', message);
+        } finally {
+          starting.splice(starting.indexOf(el), 1);
+        }
+      });
+    });
+  };
+
+  /* Registers a component. The first copy of a component on the page wins. */
+  W.define = function (name, init) {
+    if (!W.parts[name]) { W.parts[name] = init; }
+    W.ready(function () { W.init(document, name); });
+  };
+})();
+(function () {
+  WB.define('faq', function (root) {
+    /* A <details> inside another FAQ block belongs to that block, not to this one. */
+    function ownItem(node) {
+      for (var up = node.parentNode; up && up !== root; up = up.parentNode) {
+        if (up.nodeType === 1 && up.getAttribute('data-wb') === 'faq') { return false; }
+      }
+      return true;
+    }
+    /* The item this one sits inside, if it is nested in an answer. */
+    function outerItem(node) {
+      for (var up = node.parentNode; up && up !== root; up = up.parentNode) {
+        if (up.nodeType === 1 && up.tagName === 'DETAILS') { return up; }
+      }
+      return null;
+    }
+    var items = Array.prototype.filter.call(root.querySelectorAll('details'), ownItem);
+    var exclusive = WB.opt(root, 'exclusive', 'false') === 'true';
+
+    /* "One open at a time" applies among items on the same level, so opening a question inside an answer
+       does not close the answer it sits in. */
+    if (exclusive) {
+      items.forEach(function (item) {
+        item.addEventListener('toggle', function () {
+          if (!item.open) { return; }
+          items.forEach(function (other) {
+            if (other !== item && other.open && outerItem(other) === outerItem(item)) { other.open = false; }
+          });
+        });
+      });
+    }
+
+    function openFromHash() {
+      if (!root.isConnected) { window.removeEventListener('hashchange', openFromHash); return; }
+      var id = '';
+      try { id = decodeURIComponent(location.hash.slice(1)); } catch (err) { return; }
+      if (!id) { return; }
+      var target = document.getElementById(id);
+      if (!target || !root.contains(target)) { return; }
+      var item = target.closest('details');
+      if (item) {
+        item.open = true;
+        target.scrollIntoView();
+      }
+    }
+    window.addEventListener('hashchange', openFromHash);
+    openFromHash();
+  });
+})();
+</script>

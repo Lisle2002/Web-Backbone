@@ -1,0 +1,25 @@
+<style>
+.wb-float {
+  position: fixed;
+  right: max(1rem, env(safe-area-inset-right));
+  bottom: max(1rem, env(safe-area-inset-bottom));
+  z-index: var(--wb-float-z, 900);
+  display: inline-flex;
+  align-items: center;
+  min-height: 3rem;
+  padding: 0.5rem 1.1rem;
+  border-radius: 999px;
+  background: var(--wb-accent, #1a7f4b);
+  color: var(--wb-on-accent, #fff);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+.wb-float:hover { filter: brightness(1.1); }
+.wb-float:focus-visible { outline: 3px solid var(--wb-focus, #005fcc); outline-offset: 3px; }
+.wb-float__sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+@media print { .wb-float { display: none; } }
+</style>
+
+<a class="wb-float" href="https://wa.me/YOUR_PHONE_DIGITS?text=Hello%20from%20the%20website" target="_blank" rel="noopener">Chat on WhatsApp<span class="wb-float__sr"> (opens in a new tab)</span></a>

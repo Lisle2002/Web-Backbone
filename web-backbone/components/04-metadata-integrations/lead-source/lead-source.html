@@ -1,0 +1,214 @@
+<form action="YOUR_FORM_ENDPOINT" method="post">
+
+  <!-- ...your normal form fields... -->
+
+  <!-- Add this empty div inside the form. The script fills it with hidden fields. -->
+  <div data-wb="lead-source" data-wb-storage="session"></div>
+
+  <button type="submit">Send</button>
+</form>
+
+<script>
+/* ---- wb core 1.1: identical in every component; safe to include more than once ---- */
+(function () {
+  var VERSION = '1.1';
+  var W = (window.WB = window.WB || {});
+  if (W.core) {
+    if (W.core !== VERSION) {
+      console.warn('[wb] Two versions of the wb core are on this page (' + W.core + ' and ' + VERSION + '). The first one loaded is used.');
+    }
+    return;
+  }
+  W.core = VERSION;
+  W.parts = {};
+  W.flags = {};
+  var counter = 0;
+  var starting = [];
+
+  /* Unique id for generated markup, for example "wb-faq-3". An id that is already on the page
+     (for example one your own site uses) is skipped. */
+  W.uid = function (prefix) {
+    var id;
+    do {
+      counter += 1;
+      id = 'wb-' + prefix + '-' + counter;
+    } while (document.getElementById(id));
+    return id;
+  };
+
+  /* Reads data-wb-<key> from an element. Returns fallback when missing or empty. */
+  W.opt = function (el, key, fallback) {
+    var value = el.getAttribute('data-wb-' + key);
+    value = value === null ? '' : value.trim();
+    return value === '' ? fallback : value;
+  };
+
+  /* True when a setting is empty or still contains a YOUR_... placeholder. */
+  W.todo = function (value) {
+    return !value || /YOUR_[A-Z0-9_]+/.test(value);
+  };
+
+  /* Runs fn one time per page for a given key. */
+  W.once = function (key, fn) {
+    if (!W.flags[key]) { W.flags[key] = true; fn(); }
+  };
+
+  /* Dispatches a bubbling "wb:<name>" event from el. */
+  W.emit = function (el, name, detail) {
+    el.dispatchEvent(new CustomEvent('wb:' + name, { bubbles: true, detail: detail || {} }));
+  };
+
+  W.ready = function (fn) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', fn);
+    } else {
+      fn();
+    }
+  };
+
+  /* Starts every [data-wb="<name>"] inside root (root included) that has not started yet.
+     data-wb-ready is set only after the component's start-up finished without an error.
+     If it failed, the element gets data-wb-error (holding the message) and can be started again by
+     fixing the markup and calling WB.init(container). Call WB.init(container) after you insert new
+     markup with JavaScript. */
+  W.init = function (root, only) {
+    root = root || document;
+    Object.keys(W.parts).forEach(function (name) {
+      if (only && only !== name) { return; }
+      var selector = '[data-wb="' + name + '"]';
+      var found = Array.prototype.slice.call(root.querySelectorAll(selector));
+      if (root.nodeType === 1 && root.matches(selector)) { found.unshift(root); }
+      found.forEach(function (el) {
+        if (el.hasAttribute('data-wb-ready') || starting.indexOf(el) >= 0) { return; }
+        starting.push(el);
+        try {
+          W.parts[name](el);
+          el.setAttribute('data-wb-ready', '');
+          el.removeAttribute('data-wb-error');
+        } catch (err) {
+          var message = String((err && err.message) || err);
+          if (el.getAttribute('data-wb-error') !== message) {
+            console.error('[wb ' + name + ']', err);
+          }
+          el.setAttribute('data-wb-error', message);
+        } finally {
+          starting.splice(starting.indexOf(el), 1);
+        }
+      });
+    });
+  };
+
+  /* Registers a component. The first copy of a component on the page wins. */
+  W.define = function (name, init) {
+    if (!W.parts[name]) { W.parts[name] = init; }
+    W.ready(function () { W.init(document, name); });
+  };
+})();
+(function () {
+  var KEY = 'wb-lead-source';
+  var UTM = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content'];
+
+  /* Keeps a tag only if it looks like a plain label, never an email address or a phone-like number. */
+  function cleanTag(value) {
+    if (typeof value !== 'string') { return ''; }
+    value = value.trim();
+    if (!value || value.indexOf('@') !== -1) { return ''; }
+    if (/\d{7,}/.test(value.replace(/[\s.\-]/g, ''))) { return ''; }
+    return value.replace(/[^A-Za-z0-9 _.+:\/-]/g, '').slice(0, 80);
+  }
+
+  function cleanPath(value) {
+    if (typeof value !== 'string' || /@|%40/i.test(value)) { return ''; }
+    return value.replace(/[^A-Za-z0-9\/_.~%+-]/g, '').slice(0, 120);
+  }
+
+  /* Reads the current page: tags, referring host name and landing path. Never the full address. */
+  function collect() {
+    var values = {};
+    var hasTags = false;
+    var params = null;
+    try { params = new URLSearchParams(window.location.search); } catch (err) { params = null; }
+    UTM.forEach(function (key) {
+      var value = params ? cleanTag(params.get(key)) : '';
+      if (value) { values[key] = value; hasTags = true; }
+    });
+    try {
+      if (document.referrer) {
+        var ref = new URL(document.referrer);
+        if (/^https?:$/.test(ref.protocol) && ref.hostname !== window.location.hostname) {
+          values.referrer_site = ref.hostname.toLowerCase().replace(/[^a-z0-9.-]/g, '').slice(0, 100);
+        }
+      }
+    } catch (err) { /* ignore a referrer that cannot be read */ }
+    var path = cleanPath(window.location.pathname);
+    if (path) { values.landing_page = path; }
+    return { values: values, hasTags: hasTags };
+  }
+
+  function storeFor(mode) {
+    try {
+      var area = mode === 'local' ? window.localStorage : window.sessionStorage;
+      area.getItem(KEY);
+      return area;
+    } catch (err) { return null; }
+  }
+
+  function readSaved(area, maxDays) {
+    if (!area) { return null; }
+    try {
+      var data = JSON.parse(area.getItem(KEY) || 'null');
+      if (!data || typeof data !== 'object' || typeof data.t !== 'number' || !data.v || typeof data.v !== 'object') { return null; }
+      if (Date.now() - data.t > maxDays * 86400000) { return null; }
+      var clean = {};
+      UTM.concat(['referrer_site', 'landing_page']).forEach(function (key) {
+        if (typeof data.v[key] === 'string' && data.v[key]) { clean[key] = data.v[key]; }
+      });
+      return clean;
+    } catch (err) { return null; }
+  }
+
+  WB.define('lead-source', function (box) {
+    var form = box.closest('form');
+    if (!form) {
+      box.setAttribute('data-wb-state', 'invalid');
+      console.warn('[wb lead-source] Place this element inside a <form>.');
+      return;
+    }
+    var mode = WB.opt(box, 'storage', 'session');
+    if (mode !== 'session' && mode !== 'local' && mode !== 'none') { mode = 'session'; }
+    var maxDays = parseFloat(WB.opt(box, 'max-age-days', '30'));
+    if (!(maxDays > 0)) { maxDays = 30; }
+    var prefix = WB.opt(box, 'prefix', '').replace(/[^A-Za-z0-9_-]/g, '');
+
+    var now = collect();
+    var values = now.values;
+    var area = mode === 'none' ? null : storeFor(mode);
+    if (area) {
+      var saved = readSaved(area, maxDays);
+      if (saved && !now.hasTags) {
+        values = saved;
+      } else {
+        try { area.setItem(KEY, JSON.stringify({ t: Date.now(), v: values })); } catch (err) { /* keep using this page's values */ }
+      }
+    }
+
+    var added = {};
+    Object.keys(values).forEach(function (key) {
+      var name = prefix + key;
+      if (form.elements.namedItem(name)) {
+        console.warn('[wb lead-source] The form already has a field named "' + name + '". It was left unchanged.');
+        return;
+      }
+      var input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = name;
+      input.value = values[key];
+      input.setAttribute('data-wb-lead-field', '');
+      box.appendChild(input);
+      added[name] = values[key];
+    });
+    box.setAttribute('data-wb-state', Object.keys(added).length ? 'ready' : 'empty');
+    WB.emit(box, 'lead-source', { fields: added });
+  });
+})();
+</script>

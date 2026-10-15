@@ -1,0 +1,186 @@
+<style>
+.wb-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.5rem 1rem;
+  color: var(--wb-on-accent, #fff); background: var(--wb-accent, #1a56db);
+}
+.wb-banner[hidden] { display: none; }
+.wb-banner__text { margin: 0; flex: 1; }
+.wb-banner a { color: inherit; }
+.wb-banner__close {
+  flex: none; min-width: 2.75rem; min-height: 2.75rem; font: inherit; font-size: 1.25rem; cursor: pointer;
+  color: inherit; background: transparent; border: 1px solid currentColor; border-radius: var(--wb-radius, 0.375rem);
+}
+.wb-banner a:focus-visible, .wb-banner__close:focus-visible { outline: 3px solid var(--wb-on-accent, #fff); outline-offset: 2px; }
+</style>
+
+<div class="wb-banner" role="region" aria-label="Announcement" hidden
+     data-wb="announcement-banner" data-wb-id="YOUR_ANNOUNCEMENT_ID" data-wb-remember-days="30">
+  <p class="wb-banner__text">YOUR_ANNOUNCEMENT_TEXT <a href="YOUR_ANNOUNCEMENT_LINK_URL">YOUR_LINK_TEXT</a></p>
+  <button type="button" class="wb-banner__close" data-wb-dismiss aria-label="Dismiss announcement">&times;</button>
+</div>
+
+<script>
+/* ---- wb core 1.1: identical in every component; safe to include more than once ---- */
+(function () {
+  var VERSION = '1.1';
+  var W = (window.WB = window.WB || {});
+  if (W.core) {
+    if (W.core !== VERSION) {
+      console.warn('[wb] Two versions of the wb core are on this page (' + W.core + ' and ' + VERSION + '). The first one loaded is used.');
+    }
+    return;
+  }
+  W.core = VERSION;
+  W.parts = {};
+  W.flags = {};
+  var counter = 0;
+  var starting = [];
+
+  /* Unique id for generated markup, for example "wb-faq-3". An id that is already on the page
+     (for example one your own site uses) is skipped. */
+  W.uid = function (prefix) {
+    var id;
+    do {
+      counter += 1;
+      id = 'wb-' + prefix + '-' + counter;
+    } while (document.getElementById(id));
+    return id;
+  };
+
+  /* Reads data-wb-<key> from an element. Returns fallback when missing or empty. */
+  W.opt = function (el, key, fallback) {
+    var value = el.getAttribute('data-wb-' + key);
+    value = value === null ? '' : value.trim();
+    return value === '' ? fallback : value;
+  };
+
+  /* True when a setting is empty or still contains a YOUR_... placeholder. */
+  W.todo = function (value) {
+    return !value || /YOUR_[A-Z0-9_]+/.test(value);
+  };
+
+  /* Runs fn one time per page for a given key. */
+  W.once = function (key, fn) {
+    if (!W.flags[key]) { W.flags[key] = true; fn(); }
+  };
+
+  /* Dispatches a bubbling "wb:<name>" event from el. */
+  W.emit = function (el, name, detail) {
+    el.dispatchEvent(new CustomEvent('wb:' + name, { bubbles: true, detail: detail || {} }));
+  };
+
+  W.ready = function (fn) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', fn);
+    } else {
+      fn();
+    }
+  };
+
+  /* Starts every [data-wb="<name>"] inside root (root included) that has not started yet.
+     data-wb-ready is set only after the component's start-up finished without an error.
+     If it failed, the element gets data-wb-error (holding the message) and can be started again by
+     fixing the markup and calling WB.init(container). Call WB.init(container) after you insert new
+     markup with JavaScript. */
+  W.init = function (root, only) {
+    root = root || document;
+    Object.keys(W.parts).forEach(function (name) {
+      if (only && only !== name) { return; }
+      var selector = '[data-wb="' + name + '"]';
+      var found = Array.prototype.slice.call(root.querySelectorAll(selector));
+      if (root.nodeType === 1 && root.matches(selector)) { found.unshift(root); }
+      found.forEach(function (el) {
+        if (el.hasAttribute('data-wb-ready') || starting.indexOf(el) >= 0) { return; }
+        starting.push(el);
+        try {
+          W.parts[name](el);
+          el.setAttribute('data-wb-ready', '');
+          el.removeAttribute('data-wb-error');
+        } catch (err) {
+          var message = String((err && err.message) || err);
+          if (el.getAttribute('data-wb-error') !== message) {
+            console.error('[wb ' + name + ']', err);
+          }
+          el.setAttribute('data-wb-error', message);
+        } finally {
+          starting.splice(starting.indexOf(el), 1);
+        }
+      });
+    });
+  };
+
+  /* Registers a component. The first copy of a component on the page wins. */
+  W.define = function (name, init) {
+    if (!W.parts[name]) { W.parts[name] = init; }
+    W.ready(function () { W.init(document, name); });
+  };
+})();
+(function () {
+  var memory = {};
+  var store = {
+    get: function (key) {
+      try { return window.localStorage.getItem(key); } catch (err) { return memory[key] === undefined ? null : memory[key]; }
+    },
+    set: function (key, value) {
+      try { window.localStorage.setItem(key, value); } catch (err) { memory[key] = value; }
+    }
+  };
+
+  function parseTime(text) {
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:\d{2})$/.test(text)) { return NaN; }
+    return new Date(text).getTime();
+  }
+
+  function hashText(text) {
+    var h = 5381;
+    for (var i = 0; i < text.length; i++) { h = ((h << 5) + h + text.charCodeAt(i)) >>> 0; }
+    return h.toString(16);
+  }
+
+  /* First focusable element that comes after `from` in the page, or the first one in the page. */
+  function nextFocusable(from) {
+    var all = document.querySelectorAll('a[href], button:not([disabled]), input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])');
+    var first = null;
+    for (var i = 0; i < all.length; i++) {
+      if (from.contains(all[i]) || all[i].getClientRects().length === 0) { continue; }
+      if (!first) { first = all[i]; }
+      if (from.compareDocumentPosition(all[i]) & Node.DOCUMENT_POSITION_FOLLOWING) { return all[i]; }
+    }
+    return first;
+  }
+
+  WB.define('announcement-banner', function (el) {
+    var id = WB.opt(el, 'id', '');
+    var text = el.textContent.replace(/\s+/g, ' ').trim();
+    if (/YOUR_[A-Z0-9_]+/.test(text)) {
+      el.setAttribute('data-wb-state', 'unconfigured');
+      console.warn('[wb announcement-banner] Replace the YOUR_... placeholders in the banner text.');
+      return;
+    }
+    var key = 'wb-banner:' + (WB.todo(id) ? hashText(text) : id);
+    var days = parseFloat(WB.opt(el, 'remember-days', '30'));
+    if (!(days >= 0)) { days = 30; }
+
+    var now = Date.now();
+    var start = parseTime(WB.opt(el, 'start', ''));
+    var end = parseTime(WB.opt(el, 'end', ''));
+    if (!isNaN(start) && now < start) { return; }
+    if (!isNaN(end) && now > end) { return; }
+
+    var dismissedAt = parseInt(store.get(key), 10);
+    if (dismissedAt && now - dismissedAt < days * 86400000) { return; }
+
+    var button = el.querySelector('[data-wb-dismiss]');
+    if (!button) { throw new Error('announcement-banner needs a [data-wb-dismiss] button'); }
+    button.addEventListener('click', function () {
+      var hadFocus = el.contains(document.activeElement);
+      store.set(key, String(Date.now()));
+      var target = hadFocus ? nextFocusable(el) : null;
+      el.hidden = true;
+      if (target) { target.focus(); }
+      WB.emit(el, 'banner-dismiss', { id: id });
+    });
+    el.hidden = false;
+  });
+})();
+</script>

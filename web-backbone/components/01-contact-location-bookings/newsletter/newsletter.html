@@ -1,0 +1,172 @@
+<style>
+.wb-news__form { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: flex-end; max-width: 36rem; }
+.wb-news__label { flex: 1 1 14rem; font-weight: 600; }
+.wb-news__field {
+  display: block; box-sizing: border-box; width: 100%; margin-top: 0.25rem; padding: 0.6rem 0.7rem;
+  font: inherit; color: inherit; background: var(--wb-bg, transparent);
+  border: 1px solid var(--wb-border, #767676); border-radius: var(--wb-radius, 0.375rem);
+}
+.wb-news__button {
+  min-height: 2.75rem; padding: 0.6rem 1.25rem; font: inherit; font-weight: 600; cursor: pointer;
+  color: var(--wb-on-accent, #fff); background: var(--wb-accent, #1a56db);
+  border: 1px solid transparent; border-radius: var(--wb-radius, 0.375rem);
+}
+.wb-news__button[aria-disabled="true"] { opacity: 0.6; cursor: progress; }
+.wb-news__field:focus-visible, .wb-news__button:focus-visible, .wb-news a:focus-visible {
+  outline: 2px solid var(--wb-focus, #005fcc); outline-offset: 2px;
+}
+.wb-news__note { margin: 0.5rem 0 0; font-size: 0.875em; color: var(--wb-muted, inherit); }
+.wb-news__status { margin: 0.5rem 0 0; }
+.wb-news__trap { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
+</style>
+
+<div class="wb-news" data-wb="newsletter"
+     data-wb-sent="Your sign-up was sent to Mailchimp and its page opened in a new tab. You are not subscribed until you finish any confirmation step shown there.">
+  <form class="wb-news__form" action="YOUR_MAILCHIMP_FORM_ACTION_URL" method="post" target="_blank" rel="noopener">
+    <label class="wb-news__label">Email address
+      <input class="wb-news__field" type="email" name="EMAIL" autocomplete="email" required>
+    </label>
+    <div class="wb-news__trap" aria-hidden="true">
+      <input type="text" name="YOUR_MAILCHIMP_BOT_FIELD_NAME" tabindex="-1" autocomplete="off" value="">
+    </div>
+    <button class="wb-news__button" type="submit">Subscribe</button>
+  </form>
+  <p class="wb-news__note">We use Mailchimp to send this newsletter. <a href="YOUR_PRIVACY_POLICY_URL">Privacy policy</a>. You can unsubscribe in any email.</p>
+  <p class="wb-news__status" role="status" aria-live="polite" data-wb-status></p>
+</div>
+
+<script>
+/* ---- wb core 1.1: identical in every component; safe to include more than once ---- */
+(function () {
+  var VERSION = '1.1';
+  var W = (window.WB = window.WB || {});
+  if (W.core) {
+    if (W.core !== VERSION) {
+      console.warn('[wb] Two versions of the wb core are on this page (' + W.core + ' and ' + VERSION + '). The first one loaded is used.');
+    }
+    return;
+  }
+  W.core = VERSION;
+  W.parts = {};
+  W.flags = {};
+  var counter = 0;
+  var starting = [];
+
+  /* Unique id for generated markup, for example "wb-faq-3". An id that is already on the page
+     (for example one your own site uses) is skipped. */
+  W.uid = function (prefix) {
+    var id;
+    do {
+      counter += 1;
+      id = 'wb-' + prefix + '-' + counter;
+    } while (document.getElementById(id));
+    return id;
+  };
+
+  /* Reads data-wb-<key> from an element. Returns fallback when missing or empty. */
+  W.opt = function (el, key, fallback) {
+    var value = el.getAttribute('data-wb-' + key);
+    value = value === null ? '' : value.trim();
+    return value === '' ? fallback : value;
+  };
+
+  /* True when a setting is empty or still contains a YOUR_... placeholder. */
+  W.todo = function (value) {
+    return !value || /YOUR_[A-Z0-9_]+/.test(value);
+  };
+
+  /* Runs fn one time per page for a given key. */
+  W.once = function (key, fn) {
+    if (!W.flags[key]) { W.flags[key] = true; fn(); }
+  };
+
+  /* Dispatches a bubbling "wb:<name>" event from el. */
+  W.emit = function (el, name, detail) {
+    el.dispatchEvent(new CustomEvent('wb:' + name, { bubbles: true, detail: detail || {} }));
+  };
+
+  W.ready = function (fn) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', fn);
+    } else {
+      fn();
+    }
+  };
+
+  /* Starts every [data-wb="<name>"] inside root (root included) that has not started yet.
+     data-wb-ready is set only after the component's start-up finished without an error.
+     If it failed, the element gets data-wb-error (holding the message) and can be started again by
+     fixing the markup and calling WB.init(container). Call WB.init(container) after you insert new
+     markup with JavaScript. */
+  W.init = function (root, only) {
+    root = root || document;
+    Object.keys(W.parts).forEach(function (name) {
+      if (only && only !== name) { return; }
+      var selector = '[data-wb="' + name + '"]';
+      var found = Array.prototype.slice.call(root.querySelectorAll(selector));
+      if (root.nodeType === 1 && root.matches(selector)) { found.unshift(root); }
+      found.forEach(function (el) {
+        if (el.hasAttribute('data-wb-ready') || starting.indexOf(el) >= 0) { return; }
+        starting.push(el);
+        try {
+          W.parts[name](el);
+          el.setAttribute('data-wb-ready', '');
+          el.removeAttribute('data-wb-error');
+        } catch (err) {
+          var message = String((err && err.message) || err);
+          if (el.getAttribute('data-wb-error') !== message) {
+            console.error('[wb ' + name + ']', err);
+          }
+          el.setAttribute('data-wb-error', message);
+        } finally {
+          starting.splice(starting.indexOf(el), 1);
+        }
+      });
+    });
+  };
+
+  /* Registers a component. The first copy of a component on the page wins. */
+  W.define = function (name, init) {
+    if (!W.parts[name]) { W.parts[name] = init; }
+    W.ready(function () { W.init(document, name); });
+  };
+})();
+(function () {
+  WB.define('newsletter', function (el) {
+    var form = el.querySelector('form');
+    var status = el.querySelector('[data-wb-status]');
+    var button = el.querySelector('button[type="submit"]');
+    if (!form || !status || !button) { throw new Error('newsletter needs a form, a submit button and a [data-wb-status] element'); }
+
+    var bot = form.querySelector('input[name^="YOUR_"]');
+    if (bot) {
+      bot.parentNode.removeChild(bot);
+      console.warn('[wb newsletter] Bot field placeholder removed; copy the real b_... field name from Mailchimp to keep it.');
+    }
+
+    var firstAction = form.getAttribute('action') || '';
+    if (WB.todo(firstAction) || !/^https:\/\//i.test(firstAction)) {
+      el.setAttribute('data-wb-state', 'unconfigured');
+      console.warn('[wb newsletter] Set the form action to the URL from your Mailchimp embed code.');
+    }
+
+    form.addEventListener('submit', function (event) {
+      var action = form.getAttribute('action') || '';
+      if (WB.todo(action) || !/^https:\/\//i.test(action)) {
+        event.preventDefault();
+        status.textContent = 'This sign-up form is not connected to Mailchimp yet.';
+        return;
+      }
+      if (button.getAttribute('aria-disabled') === 'true') {
+        event.preventDefault();
+        return;
+      }
+      /* The browser now posts the form to Mailchimp in a new tab. */
+      button.setAttribute('aria-disabled', 'true');
+      status.textContent = WB.opt(el, 'sent', 'Your sign-up was sent to Mailchimp. Finish any confirmation step shown there.');
+      WB.emit(el, 'newsletter-submitted', {});
+      setTimeout(function () { button.removeAttribute('aria-disabled'); }, 4000);
+    });
+  });
+})();
+</script>
